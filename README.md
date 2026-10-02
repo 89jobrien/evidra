@@ -81,6 +81,19 @@ remain attributed claims. Do not grant inbox write access to untrusted producers
 | `evidra-adapters` | Bounded JSONL normalization and secure local inbox lifecycle          |
 | `evidra-cli`      | CLI composition root and rendering                                    |
 
+## Documentation
+
+| Document                             | Contents                                                      |
+| ------------------------------------ | ------------------------------------------------------------- |
+| [`docs/PRD.md`](docs/PRD.md)         | Problem, users, requirements, quality bar, non-goals          |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Slice sequence and per-slice gates                            |
+| [`docs/adr/`](docs/adr/)             | Architecture decision records                                 |
+| [`docs/designs/`](docs/designs/)     | Slice and feature designs                                     |
+| [`policies/`](policies/)             | Git-tracked assumptions, invariants, controls, accepted risks |
+
+Decisions are recorded as ADRs numbered `001`–`011`. Each states its context, the decision, and the
+consequences accepted; none is edited after acceptance, and a change of mind is a new record.
+
 ## Principles
 
 - Evidence before inference.
