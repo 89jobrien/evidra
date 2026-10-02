@@ -37,6 +37,7 @@ Each task follows red, green, clippy, commit.
 
 ### Task 1: Core derived domain
 
+**Status**: complete
 **Crate**: `evidra-core`
 **File(s)**: `crates/evidra-core/src/derivation.rs`, `crates/evidra-core/src/lib.rs`,
 `crates/evidra-core/src/ports.rs`
@@ -50,6 +51,39 @@ Each task follows red, green, clippy, commit.
 3. Add `DerivationStore` and `RelationshipStore` to `ports.rs`, including `current_facets` for
    supersedes-chain resolution.
 4. Clippy clean, then commit.
+
+`Derivation::new` takes a `DerivationDraft`, matching the existing `ObservationDraft` and
+`AgentHarnessEventDraft` convention rather than exceeding clippy's argument limit. The example at
+`crates/evidra-core/examples/derived_facets.rs` runs the domain end to end.
+
+Two defects were found and fixed while writing this task, both by running the code rather than by
+reading it:
+
+- Deriving `Deserialize` writes private fields directly, so a stored record skipped every
+  construction invariant. `Derivation` and `Relationship` now deserialize through `RawDerivation`
+  and `RawRelationship` and re-run the same `validate` the constructor uses, matching
+  `observation.rs`. Three regressions pin the smuggling cases.
+- `EvidenceTarget::key` rendered the identity with `{id:?}`, producing
+  `derivation:DerivationId(Ulid(...))` as an index key. It now uses the canonical ULID. The first
+  test only asserted the prefix, which is why it passed; the regression asserts the whole string.
+
+Property coverage landed in this task rather than Task 5, because derive-`Deserialize` turning out
+to bypass validation is direct evidence that the serde surface here is a live bug source. Five
+properties range over the accepted input space in `derivation::tests::props`: JSON round trip for
+both record types, the assisted confidence cap stated as an equivalence rather than one direction,
+`FacetValueSlot::of` agreeing with the value variant, and `Debug` output carrying neither a facet
+value nor a subject identifier. Writing them immediately found a third defect: the strategy was
+generating a `DerivationKind::Facet` record with no facets, which the domain correctly rejects.
+
+Fuzzing is deferred. `DerivationId::parse` and the manual `Deserialize` impls are parser boundaries
+and the natural fuzz targets, but `cargo-fuzz` is not installed. Nightly toolchains are available, so
+this is a missing tool rather than a missing capability.
+
+`policies/assumptions`, `policies/controls`, `policies/invariants`, and
+`policies/accepted-risks` were filled in during this task as documentation only. That content is
+Slice 4 material in `docs/ROADMAP.md`, pulled forward because the derived domain introduced
+assumptions and accepted risks that were better written down than left implicit. Slice 4 still owns
+compiling and integrity-checking them; nothing here is load-bearing yet.
 
 ### Task 2: Schema v3 and migration
 
@@ -97,14 +131,16 @@ Each task follows red, green, clippy, commit.
 ### Task 5: Property suites
 
 **Crate**: all three
-**File(s)**: `property_derivation_domain.rs`, `property_uncertainty_profile.rs`,
-`property_supersedes_chain.rs`, `property_store_invariants.rs`, `property_banding.rs`,
-`property_determinism.rs`
+**File(s)**: `property_uncertainty_profile.rs`, `property_supersedes_chain.rs`,
+`property_store_invariants.rs`, `property_banding.rs`, `property_determinism.rs`
 **Run**: `cargo nextest run --workspace`
 
-1. Add `proptest` to `[workspace.dependencies]` and as a dev-dependency to the three crates.
-2. Write each invariant to hold for arbitrary inputs, generating primitives and constructing records
-   through the public validating constructor rather than implementing `Arbitrary` on the records.
+1. `proptest` is already a workspace dependency and a dev-dependency of `evidra-core`, added in Task
+   1. The derived-domain properties are already written in `derivation::tests::props`; do not
+      duplicate them here.
+2. Write each remaining invariant to hold for arbitrary inputs, generating primitives and
+   constructing records through the public validating constructor rather than implementing
+   `Arbitrary` on the records.
 3. Commit every `proptest-regressions/` seed produced.
 4. Clippy clean, then commit.
 
@@ -136,3 +172,9 @@ derived table.
 Decision capture, failure attribution, policy evaluation, and trajectory export are separate slices
 in `docs/ROADMAP.md`. Retention for derived records is deferred and unaddressed here, which means
 superseded revisions accumulate without bound until a policy exists.
+
+Fuzz targets are named but not built. `DerivationId::parse` and both manual `Deserialize` impls parse
+untrusted input and are where a hand-written validator is most likely to be wrong in a way the
+property suites cannot reach. Installing `cargo-fuzz` is the whole of the blocker; nightly is
+already present. This belongs with Task 5 rather than after it, since fuzzing the read path is the
+cheapest way to find a validation gap before an append-only store depends on it.

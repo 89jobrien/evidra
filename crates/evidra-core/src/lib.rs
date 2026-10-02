@@ -28,11 +28,18 @@
 //! # }
 //! ```
 
+mod derivation;
 mod harness;
 mod ingest;
 mod observation;
 mod ports;
 
+pub use derivation::{
+    ConfidenceBand, Contradiction, CurrentFacet, Derivation, DerivationDraft, DerivationError,
+    DerivationId, DerivationKind, DerivationMethod, DerivationScope, EvidenceRole, EvidenceTarget,
+    FacetCount, FacetFilter, FacetValueSlot, Freshness, RelationKind, Relationship, RelationshipId,
+    ScopeFidelity, UncertaintyProfile,
+};
 pub use harness::{
     AgentHarnessEvent, AgentHarnessEventDraft, AgentHarnessEventError, AgentHarnessEventIdentity,
     AgentHarnessObservation, AgentHarnessObservationError, FacetValue, HarnessEventType,
@@ -47,4 +54,7 @@ pub use observation::{
     IntegrityRecord, Observation, ObservationDraft, ObservationError, ObservationId,
     ObservationKind, Provenance, SourceRef, SubjectRef,
 };
-pub use ports::{AgentHarnessAppendOutcome, AgentHarnessEventSource, ObservationStore};
+pub use ports::{
+    AgentHarnessAppendOutcome, AgentHarnessEventSource, DerivationStore, ObservationStore,
+    RelationshipStore,
+};

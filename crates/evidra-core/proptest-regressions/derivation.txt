@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 5b10820c7736c847381596d2a4884aa0bd7c0fa31f7f7aaa87ca2261c68ac0bd # shrinks to draft = DerivationDraft { id: DerivationId(Ulid(0)), kind: Facet, scope: DerivationScope { subject: SubjectRef { .. }, from_occurred_at: 1970-01-01T00:00:00Z, to_occurred_at: 1970-01-01T00:00:00Z, selection: [] }, profile: UncertaintyProfile { confidence: Speculative, freshness: Current, contradiction: Uncontested, scope: Exact }, method: Deterministic { version: "1" }, facets: [], recorded_at: 1970-01-01T00:00:00Z, supersedes: None }

@@ -1,10 +1,15 @@
-//! External boundaries for validated event sources and append-only observation persistence.
+//! External boundaries for validated event sources and append-only persistence.
 //!
-//! Adapters implement these traits so domain callers can read harness events and persist ordinary
-//! or identity-tracked observations without depending on storage or transport details.
+//! Adapters implement these traits so domain callers can read harness events, persist ordinary
+//! or identity-tracked observations, and store derived records and relationships without depending
+//! on storage or transport details.
 
 use std::error::Error;
 
+use crate::derivation::{
+    CurrentFacet, Derivation, DerivationScope, EvidenceTarget, FacetCount, RelationKind,
+    Relationship,
+};
 use crate::{AgentHarnessEvent, AgentHarnessObservation, Observation};
 
 /// Result of attempting to append an idempotent harness observation.
@@ -59,4 +64,68 @@ pub trait ObservationStore {
         &mut self,
         value: &AgentHarnessObservation,
     ) -> Result<AgentHarnessAppendOutcome, Self::Error>;
+}
+
+/// Persistence for derived records and their projected facets.
+///
+/// Implementations append only. A revision is a new derivation plus a
+/// [`RelationKind::Supersedes`] relationship, never a mutation of a stored row (ADR-008).
+pub trait DerivationStore {
+    /// Adapter-specific error returned by persistence operations.
+    type Error: Error + Send + Sync + 'static;
+
+    /// Appends a derivation and its indexed facet projection atomically.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter error when the record cannot be appended or a facet namespace is not
+    /// registered.
+    fn append(&mut self, derivation: &Derivation) -> Result<(), Self::Error>;
+
+    /// Returns facet values for a scope, resolving the supersedes chain so each superseded
+    /// derivation is represented exactly once by its current successor.
+    ///
+    /// This is a read-through view. Superseded rows remain stored and remain individually
+    /// retrievable; this method decides which ones count as current.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter error when the projection cannot be read or the chain cannot be resolved.
+    fn current_facets(&self, scope: &DerivationScope) -> Result<Vec<CurrentFacet>, Self::Error>;
+
+    /// Aggregates indexed facet values within a scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter error when the projection cannot be queried.
+    fn aggregate(
+        &self,
+        namespace: &str,
+        name: &str,
+        scope: &DerivationScope,
+    ) -> Result<Vec<FacetCount>, Self::Error>;
+}
+
+/// Persistence for the typed edges connecting records.
+pub trait RelationshipStore {
+    /// Adapter-specific error returned by persistence operations.
+    type Error: Error + Send + Sync + 'static;
+
+    /// Appends a relationship without replacing any existing record.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter error when the relationship cannot be appended.
+    fn append(&mut self, relationship: &Relationship) -> Result<(), Self::Error>;
+
+    /// Returns relationships touching `target` in either direction.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter error when relationships cannot be read.
+    fn neighbors(
+        &self,
+        target: EvidenceTarget,
+        relation: Option<RelationKind>,
+    ) -> Result<Vec<Relationship>, Self::Error>;
 }
