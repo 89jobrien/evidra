@@ -1,0 +1,23 @@
+[package]
+name = "evidra-store"
+description = "Local persistence adapters for Evidra"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "../../README.md"
+publish = false
+
+[dependencies]
+evidra-core.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

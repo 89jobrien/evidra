@@ -1,0 +1,13 @@
+[package]
+name = "evidra-engine"
+description = "Correlation, inference, validation, and scoring for Evidra"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "../../README.md"
+publish = false
+
+[lints]
+workspace = true

@@ -1,0 +1,21 @@
+[package]
+name = "evidra-core"
+description = "Domain model and ports for Evidra operational evidence"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "../../README.md"
+publish = false
+
+[dependencies]
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+ulid.workspace = true
+
+[lints]
+workspace = true

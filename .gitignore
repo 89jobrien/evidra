@@ -1,0 +1,6 @@
+/target/
+/.evidra/
+*.db-shm
+*.db-wal
+*.db-journal
+.ctx/godmode/
