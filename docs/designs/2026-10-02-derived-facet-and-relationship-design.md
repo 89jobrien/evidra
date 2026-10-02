@@ -100,7 +100,7 @@ operational intelligence requires:
 | `crates/evidra-engine/tests/property_banding.rs`                   | New property suite                | Band totality, monotonicity, cardinality, edge mapping                              |
 | `crates/evidra-engine/tests/property_determinism.rs`               | New property suite                | Byte-identical output for identical input                                           |
 | `Cargo.toml`                                                       | Workspace manifest                | Add `proptest` and the `evidra-engine` workspace dependency                         |
-| `Cargo.toml`                                                       | Workspace manifest (Slice 4 only) | Raise `rust-version` to 1.98, add the `rulery` path dependency, move to resolver 3  |
+| `Cargo.toml`                                                       | Workspace manifest (Slice 4 only) | Add the `rulery` path dependency and move to resolver 3                             |
 | `policies/`                                                        | Policy intent (Slice 4 only)      | Collapse four empty subdirectories into one Rulery package layout                   |
 | `README.md`                                                        | Workspace status                  | Mark the derived layer as implemented                                               |
 | `AGENTS.md`                                                        | Agent architecture guidance       | Replace the reserved-boundary description                                           |
@@ -1016,7 +1016,7 @@ requires dropping to `ProductionPolicyEvaluator` directly.
 
 | Cost                    | Detail                                                                                                                                                                                                                                                                     |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **MSRV**                | rulery requires Rust **1.98**; evidra declares `rust-version = "1.85.0"`. A path dependency forces the workspace floor to 1.98, and rulery uses resolver 3 against evidra's 2.                                                                                             |
+| **MSRV**                | None. The workspace already declares `rust-version = "1.98.0"`, so rulery's floor is already met. Only the resolver remains: rulery uses resolver 3 against evidra's 2.                                                                                                    |
 | **Not published**       | rulery has no crates.io release, no git tags, and only an `## [Unreleased]` changelog. Consume as a path dependency or pinned git/submodule.                                                                                                                               |
 | **Directory shape**     | rulery's layout is incompatible with `policies/{assumptions,controls,invariants,accepted-risks}/`. Those four directories must collapse into one rulery package, with the four concerns becoming fact roots inside `vocabulary.yaml`.                                      |
 | **Lockfile discipline** | `LockMode::Frozen` requires `rulery.lock` to exist and match. Only `rulery lock` writes it, ambient env vars do nothing, and CI must pass `Frozen` explicitly. A policy edit without a re-lock fails compilation — which is the desired behaviour, but must be documented. |
@@ -1261,9 +1261,9 @@ consistent with ADR-003.
       `evidra-core/src/derivation.rs` become the workspace's highest-value drift surfaces, but no
       taskit protocol lock exists today. Deferred and recorded under
       [Protocol-drift gate](#protocol-drift-gate) rather than silently omitted.
-- [ ] MSRV raised: yes, in Slice 4. Consuming rulery as a path dependency forces
-      `rust-version` from 1.85 to **1.98** and the resolver from 2 to 3. This is the single largest
-      cost of the rulery route and it applies to the whole workspace, not just the policy crate.
+- [ ] MSRV raised: done, standalone. `rust-version` is **1.98**, independent of the rulery route,
+      so consuming rulery no longer forces a toolchain bump. Slice 4 still moves the resolver from 2
+      to 3, which is a one-line change affecting the whole workspace.
 - [ ] Unpublished dependency: yes, in Slice 4. Rulery has no crates.io release, no git tags, and an
       `## [Unreleased]`-only changelog, so the dependency is a path or pinned git reference. Slice 1
       is unaffected because rulery is not a dependency of the derived layer.

@@ -82,7 +82,7 @@ quarantined, or escalated is decided by deterministic code over versioned policy
 
 | Property       | Threshold                                                                          |
 | -------------- | ---------------------------------------------------------------------------------- |
-| Rust toolchain | 1.85, edition 2024, inherited by every crate                                       |
+| Rust toolchain | 1.98, edition 2024, inherited by every crate                                       |
 | Warnings       | Zero at `-D warnings` across all targets                                           |
 | `unsafe`       | Forbidden workspace-wide                                                           |
 | Public API     | Documented; `missing_docs` warns                                                   |

@@ -105,7 +105,7 @@ consequences accepted; none is edited after acceptance, and a change of mind is 
 
 ## Development
 
-Evidra requires Rust 1.85 or newer. Install `cargo-nextest` before running the preferred test
+Evidra requires Rust 1.98 or newer. Install `cargo-nextest` before running the preferred test
 command.
 
 ```bash

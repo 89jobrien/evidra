@@ -27,7 +27,7 @@ evidra-adapters -> evidra-core
 
 ## Commands
 
-The workspace MSRV is Rust 1.85. Install `cargo-nextest` for the preferred test runner.
+The workspace MSRV is Rust 1.98. Install `cargo-nextest` for the preferred test runner.
 
 ```bash
 cargo fmt --all -- --check

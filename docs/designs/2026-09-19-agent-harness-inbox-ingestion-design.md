@@ -49,7 +49,7 @@ This design extends:
 | `crates/evidra-cli/Cargo.toml`        | CLI dependencies        | Add `evidra-adapters` and `serde`                                          |
 | `crates/evidra-cli/tests/cli.rs`      | End-to-end tests        | Claim/recovery/delete/quarantine/conflict/failure/text/JSON behavior       |
 | `Cargo.toml`                          | Workspace dependencies  | Add adapters path entry and pinned rustix with `std,fs,process`            |
-| `.github/workflows/ci.yml`            | Platform verification   | Run Rust 1.85 inbox tests on macOS and Linux                               |
+| `.github/workflows/ci.yml`            | Platform verification   | Run inbox tests on macOS and Linux                                         |
 | `README.md`                           | User workflow           | Document producer contract and command                                     |
 | `AGENTS.md`                           | Agent guidance          | Record lifecycle and trust invariants                                      |
 
@@ -336,8 +336,8 @@ non-blocking exclusive `flock`. Unsupported `NOREPLACE` results fail closed; onl
 retries a ULID, and `EXDEV` is `UnsupportedFilesystem`. Other targets compile a fail-closed stub.
 No unsafe code is introduced.
 
-The CI matrix runs inbox adapter tests on macOS and Linux with Rust 1.85, plus a Windows workspace
-check that compiles the fail-closed stub. Windows is not advertised as supported.
+The CI matrix runs inbox adapter tests on macOS and Linux at the workspace MSRV, plus a Windows
+workspace check that compiles the fail-closed stub. Windows is not advertised as supported.
 
 ## CLI Surface
 

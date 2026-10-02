@@ -25,7 +25,7 @@ recurring failure patterns become queryable without re-parsing every payload.
 
 ## Tech Stack
 
-- **Rust edition**: 2024, inherited from the workspace; MSRV 1.85
+- **Rust edition**: 2024, inherited from the workspace; MSRV 1.98
 - **New dependencies**: none. `evidra-engine` depends on `evidra-core` and `chrono` only, and must
   not depend on `evidra-store`
 - **Property tests**: `proptest` as a `[dev-dependencies]` workspace entry. This is the workspace's
