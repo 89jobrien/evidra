@@ -11,16 +11,17 @@ use std::time::Duration;
 
 use evidra_core::{
     AgentHarnessAppendOutcome, AgentHarnessEvent, AgentHarnessEventDraft,
-    AgentHarnessEventIdentity, AgentHarnessObservation, HarnessEventType, HarnessRef,
-    HarnessSessionId, Observation, ObservationError, ObservationStore, RedactionRecord,
-    SourceEventId, SourceRef, SubjectRef,
+    AgentHarnessEventIdentity, AgentHarnessObservation, Derivation, FacetValue, HarnessEventType,
+    HarnessRef, HarnessSessionId, Observation, ObservationError, ObservationStore, RedactionRecord,
+    Relationship, SourceEventId, SourceRef, SubjectRef,
 };
 use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use thiserror::Error;
 
 const APPLICATION_ID: i32 = 0x4556_4452;
 const LEGACY_SCHEMA_VERSION: i32 = 1;
-const SCHEMA_VERSION: i32 = 2;
+const RECEIPT_SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 const SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS observations (
     id TEXT PRIMARY KEY NOT NULL,
@@ -91,6 +92,182 @@ BEGIN
 END;
 ";
 
+/// The derived layer: derivations, their projected facets, their evidence, and the typed edges
+/// between records.
+///
+/// Every table carries the same three immutability triggers as the observation ledger, because the
+/// derived layer is revisable only by appending. A correction is a new derivation plus a
+/// `supersedes` relationship; it never rewrites the record it replaces.
+///
+/// Two constraints here are deliberately stronger than the application layer, so that a bug in a
+/// writer cannot produce a record the domain would have refused. The facet slot must agree with
+/// which value column is populated, and a relationship may not point at itself.
+const DERIVED_SCHEMA: &str = r"
+CREATE TABLE IF NOT EXISTS derivations (
+    id TEXT PRIMARY KEY NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('facet', 'aggregate', 'cluster')),
+    recorded_at TEXT NOT NULL,
+    supersedes TEXT,
+    document TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS derivations_recorded_at_idx
+    ON derivations (recorded_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS derivations_supersedes_idx
+    ON derivations (supersedes, id);
+
+CREATE TRIGGER IF NOT EXISTS derivations_reject_update
+BEFORE UPDATE ON derivations
+BEGIN
+    SELECT RAISE(ABORT, 'derivations are append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS derivations_reject_delete
+BEFORE DELETE ON derivations
+BEGIN
+    SELECT RAISE(ABORT, 'derivations are append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS derivations_reject_duplicate_insert
+BEFORE INSERT ON derivations
+WHEN EXISTS (SELECT 1 FROM derivations WHERE id = NEW.id)
+BEGIN
+    SELECT RAISE(ABORT, 'derivations are append-only');
+END;
+
+CREATE TABLE IF NOT EXISTS derivation_facets (
+    derivation_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    name TEXT NOT NULL,
+    slot TEXT NOT NULL CHECK (slot IN ('text', 'integer', 'boolean')),
+    text_value TEXT,
+    integer_value INTEGER,
+    boolean_value INTEGER CHECK (boolean_value IS NULL OR boolean_value IN (0, 1)),
+    confidence TEXT NOT NULL
+        CHECK (confidence IN ('speculative', 'weak', 'moderate', 'strong')),
+    freshness TEXT NOT NULL CHECK (freshness IN ('current', 'aging', 'stale')),
+    recorded_at TEXT NOT NULL,
+    PRIMARY KEY (derivation_id, namespace, name),
+    FOREIGN KEY (derivation_id) REFERENCES derivations(id),
+    CHECK (
+        (slot = 'text'
+            AND text_value IS NOT NULL
+            AND integer_value IS NULL
+            AND boolean_value IS NULL)
+        OR (slot = 'integer'
+            AND text_value IS NULL
+            AND integer_value IS NOT NULL
+            AND boolean_value IS NULL)
+        OR (slot = 'boolean'
+            AND text_value IS NULL
+            AND integer_value IS NULL
+            AND boolean_value IS NOT NULL)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS derivation_facets_lookup_idx
+    ON derivation_facets (namespace, name, recorded_at DESC);
+
+CREATE TRIGGER IF NOT EXISTS derivation_facets_reject_update
+BEFORE UPDATE ON derivation_facets
+BEGIN
+    SELECT RAISE(ABORT, 'derivation facets are append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS derivation_facets_reject_delete
+BEFORE DELETE ON derivation_facets
+BEGIN
+    SELECT RAISE(ABORT, 'derivation facets are append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS derivation_facets_reject_duplicate_insert
+BEFORE INSERT ON derivation_facets
+WHEN EXISTS (
+    SELECT 1 FROM derivation_facets
+    WHERE derivation_id = NEW.derivation_id
+      AND namespace = NEW.namespace
+      AND name = NEW.name
+)
+BEGIN
+    SELECT RAISE(ABORT, 'derivation facets are append-only');
+END;
+
+CREATE TABLE IF NOT EXISTS derivation_evidence (
+    derivation_id TEXT NOT NULL,
+    target_key TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('supporting', 'refuting')),
+    recorded_at TEXT NOT NULL,
+    PRIMARY KEY (derivation_id, target_key),
+    FOREIGN KEY (derivation_id) REFERENCES derivations(id)
+);
+
+CREATE INDEX IF NOT EXISTS derivation_evidence_target_idx
+    ON derivation_evidence (target_key, role);
+
+CREATE TRIGGER IF NOT EXISTS derivation_evidence_reject_update
+BEFORE UPDATE ON derivation_evidence
+BEGIN
+    SELECT RAISE(ABORT, 'derivation evidence is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS derivation_evidence_reject_delete
+BEFORE DELETE ON derivation_evidence
+BEGIN
+    SELECT RAISE(ABORT, 'derivation evidence is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS derivation_evidence_reject_duplicate_insert
+BEFORE INSERT ON derivation_evidence
+WHEN EXISTS (
+    SELECT 1 FROM derivation_evidence
+    WHERE derivation_id = NEW.derivation_id AND target_key = NEW.target_key
+)
+BEGIN
+    SELECT RAISE(ABORT, 'derivation evidence is append-only');
+END;
+
+CREATE TABLE IF NOT EXISTS relationships (
+    id TEXT PRIMARY KEY NOT NULL,
+    from_key TEXT NOT NULL,
+    to_key TEXT NOT NULL,
+    relation TEXT NOT NULL CHECK (relation IN (
+        'supports', 'refutes', 'caused-by', 'enabled', 'prevented', 'supersedes',
+        'derives-from', 'co-occurs-with', 'no-effect'
+    )),
+    confidence TEXT NOT NULL
+        CHECK (confidence IN ('speculative', 'weak', 'moderate', 'strong')),
+    recorded_at TEXT NOT NULL,
+    document TEXT NOT NULL,
+    CHECK (from_key <> to_key)
+);
+
+CREATE INDEX IF NOT EXISTS relationships_from_key_idx ON relationships (from_key, relation);
+
+CREATE INDEX IF NOT EXISTS relationships_to_key_idx ON relationships (to_key, relation);
+
+CREATE INDEX IF NOT EXISTS relationships_relation_idx ON relationships (relation);
+
+CREATE TRIGGER IF NOT EXISTS relationships_reject_update
+BEFORE UPDATE ON relationships
+BEGIN
+    SELECT RAISE(ABORT, 'relationships are append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS relationships_reject_delete
+BEFORE DELETE ON relationships
+BEGIN
+    SELECT RAISE(ABORT, 'relationships are append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS relationships_reject_duplicate_insert
+BEFORE INSERT ON relationships
+WHEN EXISTS (SELECT 1 FROM relationships WHERE id = NEW.id)
+BEGIN
+    SELECT RAISE(ABORT, 'relationships are append-only');
+END;
+";
+
 /// SQLite-backed append-only observation store.
 pub struct SqliteObservationStore {
     connection: Connection,
@@ -140,9 +317,16 @@ impl SqliteObservationStore {
                     enable_wal(&connection)?;
                     restrict_store_permissions(path)?;
                     migrate_v1_to_v2(&mut connection, path)?;
+                    migrate_v2_to_v3(&mut connection, path)?;
+                }
+                RECEIPT_SCHEMA_VERSION => {
+                    validate_v2(&connection, path)?;
+                    enable_wal(&connection)?;
+                    restrict_store_permissions(path)?;
+                    migrate_v2_to_v3(&mut connection, path)?;
                 }
                 SCHEMA_VERSION => {
-                    validate_v2(&connection, path)?;
+                    validate_v3(&connection, path)?;
                     enable_wal(&connection)?;
                 }
                 _ => {
@@ -156,9 +340,9 @@ impl SqliteObservationStore {
         } else {
             enable_wal(&connection)?;
             restrict_store_permissions(path)?;
-            initialize_v2(&mut connection, path)?;
+            initialize_v3(&mut connection, path)?;
         }
-        validate_v2(&connection, path)?;
+        validate_v3(&connection, path)?;
         restrict_store_permissions(path)?;
         Ok(Self {
             connection,
@@ -187,8 +371,14 @@ impl SqliteObservationStore {
         let connection = open_connection(path)?;
         configure_connection(&connection)?;
         let (application_id, user_version) = database_identity(&connection)?;
-        if application_id == APPLICATION_ID && user_version == LEGACY_SCHEMA_VERSION {
-            validate_v1(&connection, path)?;
+        if application_id == APPLICATION_ID
+            && (user_version == LEGACY_SCHEMA_VERSION || user_version == RECEIPT_SCHEMA_VERSION)
+        {
+            if user_version == LEGACY_SCHEMA_VERSION {
+                validate_v1(&connection, path)?;
+            } else {
+                validate_v2(&connection, path)?;
+            }
             return Err(StoreError::MigrationRequired {
                 path: path.to_path_buf(),
                 current_version: user_version,
@@ -202,7 +392,7 @@ impl SqliteObservationStore {
                 user_version,
             });
         }
-        validate_v2(&connection, path)?;
+        validate_v3(&connection, path)?;
         enable_wal(&connection)?;
         Ok(Self {
             connection,
@@ -492,6 +682,40 @@ pub enum StoreError {
     #[error("invalid persisted agent harness receipt")]
     InvalidHarnessReceipt,
 
+    /// The database schema permits a derived mutation forbidden by append-only semantics.
+    #[error("database {path} does not enforce the {constraint} constraint on derived records")]
+    IncompleteDerivedConstraint {
+        /// Database with an ineffective derived constraint.
+        path: PathBuf,
+        /// Constraint that was not enforced.
+        constraint: &'static str,
+    },
+
+    /// A persisted derived document could not be read back as a domain record.
+    #[error("derived record {id} could not be deserialized")]
+    InvalidDerivedRecord {
+        /// Identity of the unreadable record.
+        id: String,
+    },
+
+    /// Indexed derived columns disagree with the stored derived document.
+    #[error("derived record {id} has inconsistent indexed metadata")]
+    DerivedMetadataMismatch {
+        /// Identity from the stored derived document.
+        id: String,
+    },
+
+    /// Indexed facet rows disagree with the facets recorded on the derivation.
+    #[error("derived record {id} has facet rows that disagree with its document")]
+    DerivedFacetMismatch {
+        /// Identity of the record whose projection drifted.
+        id: String,
+    },
+
+    /// Migration changed a stored observation document it must not have touched.
+    #[error("schema migration altered stored observation documents")]
+    InvalidDerivedSchema,
+
     /// Store permissions could not be restricted.
     #[error("failed to set private permissions on {path}: {source}")]
     SetPermissions {
@@ -560,12 +784,13 @@ fn database_identity(connection: &Connection) -> Result<(i32, i32), StoreError> 
     Ok((application_id, user_version))
 }
 
-/// Creates and validates a new v2 schema, then records its database identity.
-fn initialize_v2(connection: &mut Connection, path: &Path) -> Result<(), StoreError> {
+/// Creates and validates a new v3 schema, then records its database identity.
+fn initialize_v3(connection: &mut Connection, path: &Path) -> Result<(), StoreError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     transaction.execute_batch(SCHEMA)?;
     transaction.execute_batch(RECEIPT_SCHEMA)?;
-    validate_v2_schema(&transaction, path)?;
+    transaction.execute_batch(DERIVED_SCHEMA)?;
+    validate_v3_schema(&transaction, path)?;
     transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()?;
@@ -580,6 +805,23 @@ fn migrate_v1_to_v2(connection: &mut Connection, path: &Path) -> Result<(), Stor
     validate_v2_schema(&transaction, path)?;
     if observation_documents(&transaction)? != documents_before {
         return Err(StoreError::InvalidHarnessReceipt);
+    }
+    transaction.pragma_update(None, "user_version", RECEIPT_SCHEMA_VERSION)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Migrates a validated v2 database to v3 by adding the derived layer.
+///
+/// Additive only. No observation, receipt, or derived document is rewritten, because the schema
+/// version is the one thing that may legitimately change while the stored bytes may not.
+fn migrate_v2_to_v3(connection: &mut Connection, path: &Path) -> Result<(), StoreError> {
+    let documents_before = observation_documents(connection)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    transaction.execute_batch(DERIVED_SCHEMA)?;
+    validate_v3_schema(&transaction, path)?;
+    if observation_documents(&transaction)? != documents_before {
+        return Err(StoreError::InvalidDerivedSchema);
     }
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()?;
@@ -596,7 +838,7 @@ fn validate_v1(connection: &Connection, path: &Path) -> Result<(), StoreError> {
 /// Validates the v2 database identity and all v2 schema invariants.
 fn validate_v2(connection: &Connection, path: &Path) -> Result<(), StoreError> {
     let (application_id, user_version) = database_identity(connection)?;
-    if application_id != APPLICATION_ID || user_version != SCHEMA_VERSION {
+    if application_id != APPLICATION_ID || user_version != RECEIPT_SCHEMA_VERSION {
         return Err(StoreError::UnexpectedDatabase {
             path: path.to_path_buf(),
             application_id,
@@ -615,6 +857,31 @@ fn validate_v2_schema(connection: &Connection, path: &Path) -> Result<(), StoreE
     validate_receipt_controls(connection, path)?;
     validate_receipt_identity_probe(connection)?;
     validate_receipt_rows(connection)
+}
+
+/// Validates the v3 database identity and every v3 schema invariant.
+fn validate_v3(connection: &Connection, path: &Path) -> Result<(), StoreError> {
+    let (application_id, user_version) = database_identity(connection)?;
+    if application_id != APPLICATION_ID || user_version != SCHEMA_VERSION {
+        return Err(StoreError::UnexpectedDatabase {
+            path: path.to_path_buf(),
+            application_id,
+            user_version,
+        });
+    }
+    validate_v3_schema(connection, path)
+}
+
+/// Validates v3 structures, controls, and persisted rows across both layers.
+///
+/// The v2 invariants are re-asserted rather than assumed. The derived tables reference
+/// `observations`, so a database that satisfies only the derived checks is not a v3 database.
+fn validate_v3_schema(connection: &Connection, path: &Path) -> Result<(), StoreError> {
+    validate_v2_schema(connection, path)?;
+    validate_derived_schema(connection, path)?;
+    validate_derived_controls(connection, path)?;
+    validate_derived_constraints(connection, path)?;
+    validate_derived_rows(connection)
 }
 
 /// Validates the observation table, index, and exact append-only trigger definitions.
@@ -873,6 +1140,635 @@ fn observation_documents(connection: &Connection) -> Result<Vec<(String, String)
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(documents)
+}
+
+/// Verifies the derived tables, indexes, and exact trigger definitions.
+///
+/// Trigger text is compared after normalization rather than trusted, because a trigger that exists
+/// but has been redefined to do nothing is indistinguishable from a missing one by name alone.
+fn validate_derived_schema(connection: &Connection, path: &Path) -> Result<(), StoreError> {
+    const REQUIRED_OBJECTS: [(&str, &str); 20] = [
+        ("table", "derivations"),
+        ("table", "derivation_facets"),
+        ("table", "derivation_evidence"),
+        ("table", "relationships"),
+        ("index", "derivations_recorded_at_idx"),
+        ("index", "derivations_supersedes_idx"),
+        ("index", "derivation_facets_lookup_idx"),
+        ("index", "derivation_evidence_target_idx"),
+        ("index", "relationships_from_key_idx"),
+        ("index", "relationships_to_key_idx"),
+        ("index", "relationships_relation_idx"),
+        ("trigger", "derivations_reject_update"),
+        ("trigger", "derivations_reject_delete"),
+        ("trigger", "derivations_reject_duplicate_insert"),
+        ("trigger", "derivation_facets_reject_update"),
+        ("trigger", "derivation_facets_reject_delete"),
+        ("trigger", "derivation_facets_reject_duplicate_insert"),
+        ("trigger", "derivation_evidence_reject_update"),
+        ("trigger", "derivation_evidence_reject_delete"),
+        ("trigger", "derivation_evidence_reject_duplicate_insert"),
+    ];
+
+    for (object_type, object_name) in REQUIRED_OBJECTS {
+        let exists: bool = connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM sqlite_master WHERE type = ?1 AND name = ?2
+             )",
+            params![object_type, object_name],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(StoreError::IncompleteSchema {
+                path: path.to_path_buf(),
+                object: object_name,
+            });
+        }
+    }
+
+    for (name, expected) in [
+        (
+            "derivations_reject_update",
+            "CREATE TRIGGER derivations_reject_update
+             BEFORE UPDATE ON derivations
+             BEGIN SELECT RAISE(ABORT, 'derivations are append-only'); END",
+        ),
+        (
+            "derivations_reject_delete",
+            "CREATE TRIGGER derivations_reject_delete
+             BEFORE DELETE ON derivations
+             BEGIN SELECT RAISE(ABORT, 'derivations are append-only'); END",
+        ),
+        (
+            "derivations_reject_duplicate_insert",
+            "CREATE TRIGGER derivations_reject_duplicate_insert
+             BEFORE INSERT ON derivations
+             WHEN EXISTS (SELECT 1 FROM derivations WHERE id = NEW.id)
+             BEGIN SELECT RAISE(ABORT, 'derivations are append-only'); END",
+        ),
+        (
+            "derivation_facets_reject_update",
+            "CREATE TRIGGER derivation_facets_reject_update
+             BEFORE UPDATE ON derivation_facets
+             BEGIN SELECT RAISE(ABORT, 'derivation facets are append-only'); END",
+        ),
+        (
+            "derivation_facets_reject_delete",
+            "CREATE TRIGGER derivation_facets_reject_delete
+             BEFORE DELETE ON derivation_facets
+             BEGIN SELECT RAISE(ABORT, 'derivation facets are append-only'); END",
+        ),
+        (
+            "derivation_facets_reject_duplicate_insert",
+            "CREATE TRIGGER derivation_facets_reject_duplicate_insert
+             BEFORE INSERT ON derivation_facets
+             WHEN EXISTS (
+                 SELECT 1 FROM derivation_facets
+                 WHERE derivation_id = NEW.derivation_id
+                   AND namespace = NEW.namespace
+                   AND name = NEW.name
+             )
+             BEGIN SELECT RAISE(ABORT, 'derivation facets are append-only'); END",
+        ),
+        (
+            "derivation_evidence_reject_update",
+            "CREATE TRIGGER derivation_evidence_reject_update
+             BEFORE UPDATE ON derivation_evidence
+             BEGIN SELECT RAISE(ABORT, 'derivation evidence is append-only'); END",
+        ),
+        (
+            "derivation_evidence_reject_delete",
+            "CREATE TRIGGER derivation_evidence_reject_delete
+             BEFORE DELETE ON derivation_evidence
+             BEGIN SELECT RAISE(ABORT, 'derivation evidence is append-only'); END",
+        ),
+        (
+            "derivation_evidence_reject_duplicate_insert",
+            "CREATE TRIGGER derivation_evidence_reject_duplicate_insert
+             BEFORE INSERT ON derivation_evidence
+             WHEN EXISTS (
+                 SELECT 1 FROM derivation_evidence
+                 WHERE derivation_id = NEW.derivation_id AND target_key = NEW.target_key
+             )
+             BEGIN SELECT RAISE(ABORT, 'derivation evidence is append-only'); END",
+        ),
+        (
+            "relationships_reject_update",
+            "CREATE TRIGGER relationships_reject_update
+             BEFORE UPDATE ON relationships
+             BEGIN SELECT RAISE(ABORT, 'relationships are append-only'); END",
+        ),
+        (
+            "relationships_reject_delete",
+            "CREATE TRIGGER relationships_reject_delete
+             BEFORE DELETE ON relationships
+             BEGIN SELECT RAISE(ABORT, 'relationships are append-only'); END",
+        ),
+        (
+            "relationships_reject_duplicate_insert",
+            "CREATE TRIGGER relationships_reject_duplicate_insert
+             BEFORE INSERT ON relationships
+             WHEN EXISTS (SELECT 1 FROM relationships WHERE id = NEW.id)
+             BEGIN SELECT RAISE(ABORT, 'relationships are append-only'); END",
+        ),
+    ] {
+        validate_trigger_definition(connection, path, name, expected)?;
+    }
+
+    validate_derived_columns(connection, path)?;
+    Ok(())
+}
+
+/// Verifies the column order, types, nullability, and keys of the derived tables.
+fn validate_derived_columns(connection: &Connection, path: &Path) -> Result<(), StoreError> {
+    const DERIVATIONS: [(&str, i32, i32); 5] = [
+        ("id", 1, 1),
+        ("kind", 1, 0),
+        ("recorded_at", 1, 0),
+        ("supersedes", 0, 0),
+        ("document", 1, 0),
+    ];
+    const DERIVATION_FACETS: [(&str, i32, i32); 10] = [
+        ("derivation_id", 1, 1),
+        ("namespace", 1, 2),
+        ("name", 1, 3),
+        ("slot", 1, 0),
+        ("text_value", 0, 0),
+        ("integer_value", 0, 0),
+        ("boolean_value", 0, 0),
+        ("confidence", 1, 0),
+        ("freshness", 1, 0),
+        ("recorded_at", 1, 0),
+    ];
+    const DERIVATION_EVIDENCE: [(&str, i32, i32); 4] = [
+        ("derivation_id", 1, 1),
+        ("target_key", 1, 2),
+        ("role", 1, 0),
+        ("recorded_at", 1, 0),
+    ];
+    const RELATIONSHIPS: [(&str, i32, i32); 7] = [
+        ("id", 1, 1),
+        ("from_key", 1, 0),
+        ("to_key", 1, 0),
+        ("relation", 1, 0),
+        ("confidence", 1, 0),
+        ("recorded_at", 1, 0),
+        ("document", 1, 0),
+    ];
+
+    for (table, columns_label, expected) in [
+        ("derivations", "derivations columns", &DERIVATIONS[..]),
+        (
+            "derivation_facets",
+            "derivation facets columns",
+            &DERIVATION_FACETS[..],
+        ),
+        (
+            "derivation_evidence",
+            "derivation evidence columns",
+            &DERIVATION_EVIDENCE[..],
+        ),
+        ("relationships", "relationships columns", &RELATIONSHIPS[..]),
+    ] {
+        let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+        let columns = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i32>(3)?,
+                    row.get::<_, i32>(5)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let expected = expected
+            .iter()
+            .map(|(name, not_null, primary_key)| (String::from(*name), *not_null, *primary_key))
+            .collect::<Vec<_>>();
+        if columns != expected {
+            return Err(StoreError::IncompleteSchema {
+                path: path.to_path_buf(),
+                object: columns_label,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Probes that every derived table rejects update, delete, replacement, and duplicate insert.
+///
+/// Also probes the foreign key from the two child tables to `derivations`, because a facet or
+/// evidence row pointing at a derivation that does not exist would silently corrupt every
+/// current-view resolution that walks those rows.
+///
+/// `relationships` gets no such foreign key, and that is deliberate rather than an omission: its
+/// `from_key` and `to_key` are strings that may name either an observation or a derivation, so no
+/// single SQL foreign key can express the union. Referential integrity for edges is checked by
+/// [`validate_derived_rows`] walking both ends instead.
+fn validate_derived_controls(connection: &Connection, path: &Path) -> Result<(), StoreError> {
+    const PROBE_DERIVATION: &str = "__evidra_derived_probe__";
+    const PROBE_RELATIONSHIP: &str = "__evidra_relationship_probe__";
+    const PROBE_TARGET: &str = "observation:__evidra_derived_probe__";
+
+    connection.execute_batch("SAVEPOINT evidra_derived_control_probe")?;
+    let result = (|| -> Result<Vec<(&'static str, bool)>, StoreError> {
+        connection.execute(
+            "INSERT INTO derivations (id, kind, recorded_at, supersedes, document)
+             VALUES (?1, 'facet', '1970-01-01T00:00:00+00:00', NULL, '{}')",
+            [PROBE_DERIVATION],
+        )?;
+        connection.execute(
+            "INSERT INTO derivation_facets
+             (derivation_id, namespace, name, slot, text_value, integer_value, boolean_value,
+              confidence, freshness, recorded_at)
+             VALUES (?1, 'probe', 'probe', 'text', 'probe', NULL, NULL,
+                     'weak', 'current', '1970-01-01T00:00:00+00:00')",
+            [PROBE_DERIVATION],
+        )?;
+        connection.execute(
+            "INSERT INTO derivation_evidence (derivation_id, target_key, role, recorded_at)
+             VALUES (?1, ?2, 'supporting', '1970-01-01T00:00:00+00:00')",
+            params![PROBE_DERIVATION, PROBE_TARGET],
+        )?;
+        connection.execute(
+            "INSERT INTO relationships
+             (id, from_key, to_key, relation, confidence, recorded_at, document)
+             VALUES (?1, ?2, 'derivation:other', 'supports', 'weak',
+                     '1970-01-01T00:00:00+00:00', '{}')",
+            params![PROBE_RELATIONSHIP, PROBE_TARGET],
+        )?;
+
+        let mut checks = Vec::new();
+        for (operation, table, key) in [
+            ("derivations update", "derivations", "id = ?1"),
+            ("derivations delete", "derivations", "id = ?1"),
+            (
+                "derivation facets update",
+                "derivation_facets",
+                "derivation_id = ?1",
+            ),
+            (
+                "derivation facets delete",
+                "derivation_facets",
+                "derivation_id = ?1",
+            ),
+            (
+                "derivation evidence update",
+                "derivation_evidence",
+                "derivation_id = ?1",
+            ),
+            (
+                "derivation evidence delete",
+                "derivation_evidence",
+                "derivation_id = ?1",
+            ),
+            ("relationships update", "relationships", "id = ?1"),
+            ("relationships delete", "relationships", "id = ?1"),
+        ] {
+            let probe_id = if table == "relationships" {
+                PROBE_RELATIONSHIP
+            } else {
+                PROBE_DERIVATION
+            };
+            let statement = if operation.ends_with("delete") {
+                format!("DELETE FROM {table} WHERE {key}")
+            } else {
+                format!("UPDATE {table} SET recorded_at = recorded_at WHERE {key}")
+            };
+            checks.push((
+                operation,
+                connection.execute(&statement, [probe_id]).is_err(),
+            ));
+        }
+
+        checks.push((
+            "derivations insert-or-replace",
+            connection
+                .execute(
+                    "INSERT OR REPLACE INTO derivations
+                     (id, kind, recorded_at, supersedes, document)
+                     VALUES (?1, 'facet', '1970-01-01T00:00:00+00:00', NULL, '{}')",
+                    [PROBE_DERIVATION],
+                )
+                .is_err(),
+        ));
+        checks.push((
+            "derivations duplicate insert",
+            connection
+                .execute(
+                    "INSERT INTO derivations
+                     (id, kind, recorded_at, supersedes, document)
+                     VALUES (?1, 'facet', '1970-01-01T00:00:00+00:00', NULL, '{}')",
+                    [PROBE_DERIVATION],
+                )
+                .is_err(),
+        ));
+        checks.push((
+            "derivation facets duplicate insert",
+            connection
+                .execute(
+                    "INSERT INTO derivation_facets
+                     (derivation_id, namespace, name, slot, text_value, integer_value,
+                      boolean_value, confidence, freshness, recorded_at)
+                     VALUES (?1, 'probe', 'probe', 'text', 'other', NULL, NULL,
+                             'weak', 'current', '1970-01-01T00:00:00+00:00')",
+                    [PROBE_DERIVATION],
+                )
+                .is_err(),
+        ));
+        checks.push((
+            "derivation evidence duplicate insert",
+            connection
+                .execute(
+                    "INSERT INTO derivation_evidence (derivation_id, target_key, role, recorded_at)
+                     VALUES (?1, ?2, 'refuting', '1970-01-01T00:00:00+00:00')",
+                    params![PROBE_DERIVATION, PROBE_TARGET],
+                )
+                .is_err(),
+        ));
+        checks.push((
+            "derivation evidence orphan insert",
+            connection
+                .execute(
+                    "INSERT INTO derivation_evidence (derivation_id, target_key, role, recorded_at)
+                     VALUES ('__evidra_missing_derivation__', ?1, 'refuting',
+                             '1970-01-01T00:00:00+00:00')",
+                    [PROBE_TARGET],
+                )
+                .is_err(),
+        ));
+        checks.push((
+            "derivation facets orphan insert",
+            connection
+                .execute(
+                    "INSERT INTO derivation_facets
+                     (derivation_id, namespace, name, slot, text_value, integer_value,
+                      boolean_value, confidence, freshness, recorded_at)
+                     VALUES ('__evidra_missing_derivation__', 'probe', 'orphan', 'text',
+                             'probe', NULL, NULL, 'weak', 'current',
+                             '1970-01-01T00:00:00+00:00')",
+                    [],
+                )
+                .is_err(),
+        ));
+        checks.push((
+            "relationships duplicate insert",
+            connection
+                .execute(
+                    "INSERT INTO relationships
+                     (id, from_key, to_key, relation, confidence, recorded_at, document)
+                     VALUES (?1, ?2, 'derivation:other', 'supports', 'weak',
+                             '1970-01-01T00:00:00+00:00', '{}')",
+                    params![PROBE_RELATIONSHIP, PROBE_TARGET],
+                )
+                .is_err(),
+        ));
+        Ok(checks)
+    })();
+    connection.execute_batch(
+        "ROLLBACK TO evidra_derived_control_probe;
+         RELEASE evidra_derived_control_probe;",
+    )?;
+    let checks = result?;
+
+    for (operation, blocked) in checks {
+        if !blocked {
+            return Err(StoreError::IncompleteAppendOnlyControl {
+                path: path.to_path_buf(),
+                operation,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Probes the two constraints that are stronger than the application layer.
+///
+/// The facet slot must agree with which value column is populated, and a relationship may not point
+/// at itself. Both are refused by the domain too; asserting them here proves the database enforces
+/// them even when a writer bypasses the constructor.
+fn validate_derived_constraints(connection: &Connection, path: &Path) -> Result<(), StoreError> {
+    const PROBE_DERIVATION: &str = "__evidra_slot_probe__";
+    const PROBE_RELATIONSHIP: &str = "__evidra_edge_probe__";
+
+    connection.execute_batch("SAVEPOINT evidra_derived_constraint_probe")?;
+    let result = (|| -> Result<[bool; 4], StoreError> {
+        connection.execute(
+            "INSERT INTO derivations (id, kind, recorded_at, supersedes, document)
+             VALUES (?1, 'facet', '1970-01-01T00:00:00+00:00', NULL, '{}')",
+            [PROBE_DERIVATION],
+        )?;
+        let slot_mismatch = connection
+            .execute(
+                "INSERT INTO derivation_facets
+                 (derivation_id, namespace, name, slot, text_value, integer_value,
+                  boolean_value, confidence, freshness, recorded_at)
+                 VALUES (?1, 'probe', 'mismatch', 'text', NULL, 7, NULL,
+                         'weak', 'current', '1970-01-01T00:00:00+00:00')",
+                [PROBE_DERIVATION],
+            )
+            .is_err();
+        let unknown_slot = connection
+            .execute(
+                "INSERT INTO derivation_facets
+                 (derivation_id, namespace, name, slot, text_value, integer_value,
+                  boolean_value, confidence, freshness, recorded_at)
+                 VALUES (?1, 'probe', 'unknown', 'path', 'probe', NULL, NULL,
+                         'weak', 'current', '1970-01-01T00:00:00+00:00')",
+                [PROBE_DERIVATION],
+            )
+            .is_err();
+        let self_edge = connection
+            .execute(
+                "INSERT INTO relationships
+                 (id, from_key, to_key, relation, confidence, recorded_at, document)
+                 VALUES (?1, 'derivation:self', 'derivation:self', 'supports', 'weak',
+                         '1970-01-01T00:00:00+00:00', '{}')",
+                [PROBE_RELATIONSHIP],
+            )
+            .is_err();
+        let unknown_relation = connection
+            .execute(
+                "INSERT INTO relationships
+                 (id, from_key, to_key, relation, confidence, recorded_at, document)
+                 VALUES (?1, 'derivation:a', 'derivation:b', 'implies', 'weak',
+                         '1970-01-01T00:00:00+00:00', '{}')",
+                [PROBE_RELATIONSHIP],
+            )
+            .is_err();
+        Ok([slot_mismatch, unknown_slot, self_edge, unknown_relation])
+    })();
+    connection.execute_batch(
+        "ROLLBACK TO evidra_derived_constraint_probe;
+         RELEASE evidra_derived_constraint_probe;",
+    )?;
+
+    let checks = result?;
+
+    for (operation, blocked) in [
+        ("facet slot disagreement", checks[0]),
+        ("unknown facet slot", checks[1]),
+        ("self-referential relationship", checks[2]),
+        ("unknown relation kind", checks[3]),
+    ] {
+        if !blocked {
+            return Err(StoreError::IncompleteDerivedConstraint {
+                path: path.to_path_buf(),
+                constraint: operation,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Verifies every persisted derived record against its own serialized document.
+///
+/// Deserializing through the domain type re-runs the constructor invariants, so a stored record that
+/// could never have been constructed is rejected here too. The indexed facets are then compared
+/// against the document's facets, which is the check that matters most: a stale projection would
+/// otherwise answer current-view queries with a value the record no longer claims.
+fn validate_derived_rows(connection: &Connection) -> Result<(), StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT id, kind, recorded_at, supersedes, document
+         FROM derivations
+         ORDER BY id",
+    )?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    for (id, kind, recorded_at, supersedes, document) in rows {
+        let derivation: Derivation = serde_json::from_str(&document)
+            .map_err(|_| StoreError::InvalidDerivedRecord { id: id.clone() })?;
+        if derivation.kind().as_str() != kind
+            || derivation.recorded_at().to_rfc3339() != recorded_at
+            || derivation.supersedes().map(|id| id.as_str()) != supersedes
+        {
+            return Err(StoreError::DerivedMetadataMismatch { id: id.clone() });
+        }
+        validate_projected_facets(connection, &derivation)?;
+    }
+
+    let mut statement = connection.prepare(
+        "SELECT id, from_key, to_key, relation, confidence, recorded_at, document
+         FROM relationships
+         ORDER BY id",
+    )?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    for (id, from_key, to_key, relation, confidence, recorded_at, document) in rows {
+        let relationship: Relationship = serde_json::from_str(&document)
+            .map_err(|_| StoreError::InvalidDerivedRecord { id: id.clone() })?;
+        if relationship.from().key() != from_key
+            || relationship.to().key() != to_key
+            || relationship.relation().as_str() != relation
+            || relationship.profile().confidence().as_str() != confidence
+            || relationship.recorded_at().to_rfc3339() != recorded_at
+        {
+            return Err(StoreError::DerivedMetadataMismatch { id });
+        }
+    }
+
+    Ok(())
+}
+
+/// Confirms the indexed facet rows agree with the facets recorded on the derivation.
+fn validate_projected_facets(
+    connection: &Connection,
+    derivation: &Derivation,
+) -> Result<(), StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT namespace, name, slot, text_value, integer_value, boolean_value,
+                confidence, freshness, recorded_at
+         FROM derivation_facets
+         WHERE derivation_id = ?1
+         ORDER BY namespace, name",
+    )?;
+    let projected = statement
+        .query_map([derivation.id().as_str()], |row| {
+            Ok(FacetRow {
+                namespace: row.get(0)?,
+                name: row.get(1)?,
+                slot: row.get(2)?,
+                text_value: row.get(3)?,
+                integer_value: row.get(4)?,
+                boolean_value: row.get(5)?,
+                confidence: row.get(6)?,
+                freshness: row.get(7)?,
+                recorded_at: row.get(8)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let profile = derivation.profile();
+    let mut recorded = derivation
+        .facets()
+        .iter()
+        .map(|facet| {
+            let (text_value, integer_value, boolean_value) = match facet.value() {
+                FacetValue::Text(text) => (Some(text.clone()), None, None),
+                FacetValue::Integer(number) => (None, Some(*number), None),
+                FacetValue::Boolean(flag) => (None, None, Some(i64::from(*flag))),
+            };
+            FacetRow {
+                namespace: facet.namespace().to_owned(),
+                name: facet.name().to_owned(),
+                slot: facet.slot().as_str().to_owned(),
+                text_value,
+                integer_value,
+                boolean_value,
+                confidence: profile.confidence().as_str().to_owned(),
+                freshness: profile.freshness().as_str().to_owned(),
+                recorded_at: derivation.recorded_at().to_rfc3339(),
+            }
+        })
+        .collect::<Vec<_>>();
+    recorded
+        .sort_by(|left, right| (&left.namespace, &left.name).cmp(&(&right.namespace, &right.name)));
+
+    if projected != recorded {
+        return Err(StoreError::DerivedFacetMismatch {
+            id: derivation.id().as_str(),
+        });
+    }
+    Ok(())
+}
+
+/// One projected facet row, as read from storage or rebuilt from the record, for exact comparison.
+///
+/// Comparing whole rows rather than spot-checking columns is what makes a stale projection
+/// detectable: a writer that updates one column of one row is caught by the same equality check
+/// that catches a missing row.
+#[derive(Debug, PartialEq, Eq)]
+struct FacetRow {
+    namespace: String,
+    name: String,
+    slot: String,
+    text_value: Option<String>,
+    integer_value: Option<i64>,
+    boolean_value: Option<i64>,
+    confidence: String,
+    freshness: String,
+    recorded_at: String,
 }
 
 /// Verifies the receipt table, indexes, foreign key, and exact trigger definitions.
@@ -1329,15 +2225,166 @@ fn restrict_new_directory(_path: &Path, _existed: bool) -> Result<(), StoreError
 mod tests {
     use chrono::Utc;
     use evidra_core::{
-        AgentHarnessEvent, AgentHarnessEventDraft, AgentHarnessObservation, FacetValue,
-        HarnessEventType, HarnessRef, HarnessSessionId, Observation, ObservationDraft,
-        ObservationFacet, ObservationKind, ObservationStore, Provenance, RedactedExcerpt,
-        RedactionRecord, SourceEventId, SourceRef, SubjectRef,
+        AgentHarnessEvent, AgentHarnessEventDraft, AgentHarnessObservation, ConfidenceBand,
+        Derivation, DerivationDraft, DerivationId, DerivationKind, DerivationMethod,
+        DerivationScope, EvidenceTarget, FacetProjection, FacetValue, HarnessEventType, HarnessRef,
+        HarnessSessionId, Observation, ObservationDraft, ObservationFacet, ObservationKind,
+        ObservationStore, Provenance, RedactedExcerpt, RedactionRecord, RelationKind, Relationship,
+        RelationshipId, SourceEventId, SourceRef, SubjectRef, UncertaintyProfile,
     };
     use serde_json::json;
     use tempfile::TempDir;
 
-    use super::{APPLICATION_ID, SCHEMA, SqliteObservationStore, StoreError};
+    use super::{APPLICATION_ID, RECEIPT_SCHEMA, SCHEMA, SqliteObservationStore, StoreError};
+
+    /// A fixed instant so derived fixtures are reproducible across runs.
+    const DERIVED_AT: &str = "2026-10-02T09:00:00Z";
+
+    /// Builds a valid facet derivation carrying one projection of each slot type.
+    fn facet_derivation() -> Derivation {
+        let recorded_at = DERIVED_AT.parse().expect("fixture instant should parse");
+        let subject = SubjectRef::new("repository", "/workspace").expect("subject should be valid");
+        let scope = DerivationScope::new(
+            subject,
+            recorded_at,
+            recorded_at + chrono::Duration::days(1),
+            Vec::new(),
+        )
+        .expect("window should be ordered");
+
+        Derivation::new(DerivationDraft {
+            id: DerivationId::new(),
+            kind: DerivationKind::Facet,
+            scope,
+            profile: UncertaintyProfile::deterministic().with_confidence(ConfidenceBand::Moderate),
+            method: DerivationMethod::Deterministic {
+                version: "engine-0.1.0".into(),
+            },
+            facets: vec![
+                FacetProjection::new("friction", "category", FacetValue::Text("auth".into()))
+                    .expect("projection should be valid"),
+                FacetProjection::new("latency", "count", FacetValue::Integer(7))
+                    .expect("projection should be valid"),
+                FacetProjection::new("retry", "exhausted", FacetValue::Boolean(true))
+                    .expect("projection should be valid"),
+            ],
+            recorded_at,
+            supersedes: None,
+        })
+        .expect("derivation should be valid")
+    }
+
+    /// Builds a valid relationship between two derivations.
+    fn edge_relationship(from: DerivationId, to: DerivationId) -> Relationship {
+        let recorded_at = DERIVED_AT.parse().expect("fixture instant should parse");
+        Relationship::new(
+            RelationshipId::new(),
+            EvidenceTarget::Derivation(from),
+            EvidenceTarget::Derivation(to),
+            RelationKind::Supports,
+            UncertaintyProfile::deterministic().with_confidence(ConfidenceBand::Weak),
+            DerivationMethod::Deterministic {
+                version: "engine-0.1.0".into(),
+            },
+            recorded_at,
+        )
+        .expect("relationship should be valid")
+    }
+
+    /// Writes a derivation and its indexed projections exactly as the store will.
+    ///
+    /// Nothing writes derived rows yet, so without this the row validator would pass vacuously and
+    /// prove nothing. `corrupt_facet_value` exists so a test can introduce projection drift and
+    /// confirm validation catches it rather than rubber-stamping whatever is on disk.
+    fn insert_derivation(
+        connection: &rusqlite::Connection,
+        derivation: &Derivation,
+        corrupt_facet_value: bool,
+    ) {
+        let recorded_at = derivation.recorded_at().to_rfc3339();
+        let document = serde_json::to_string(derivation).expect("derivation should serialize");
+        connection
+            .execute(
+                "INSERT INTO derivations (id, kind, recorded_at, supersedes, document)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![
+                    derivation.id().as_str(),
+                    derivation.kind().as_str(),
+                    recorded_at,
+                    derivation.supersedes().map(|id| id.as_str()),
+                    document
+                ],
+            )
+            .expect("derivation should insert");
+
+        let profile = derivation.profile();
+        for facet in derivation.facets() {
+            let (text_value, integer_value, boolean_value) = if corrupt_facet_value {
+                (Some("drifted".to_owned()), None, None)
+            } else {
+                match facet.value() {
+                    FacetValue::Text(text) => (Some(text.clone()), None, None),
+                    FacetValue::Integer(number) => (None, Some(*number), None),
+                    FacetValue::Boolean(flag) => (None, None, Some(i64::from(*flag))),
+                }
+            };
+            connection
+                .execute(
+                    "INSERT INTO derivation_facets
+                     (derivation_id, namespace, name, slot, text_value, integer_value,
+                      boolean_value, confidence, freshness, recorded_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    rusqlite::params![
+                        derivation.id().as_str(),
+                        facet.namespace(),
+                        facet.name(),
+                        if corrupt_facet_value {
+                            "text".to_owned()
+                        } else {
+                            facet.slot().as_str().to_owned()
+                        },
+                        text_value,
+                        integer_value,
+                        boolean_value,
+                        profile.confidence().as_str(),
+                        profile.freshness().as_str(),
+                        recorded_at
+                    ],
+                )
+                .expect("facet row should insert");
+        }
+    }
+
+    fn insert_relationship(connection: &rusqlite::Connection, relationship: &Relationship) {
+        connection
+            .execute(
+                "INSERT INTO relationships
+                 (id, from_key, to_key, relation, confidence, recorded_at, document)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    relationship.id().as_str(),
+                    relationship.from().key(),
+                    relationship.to().key(),
+                    relationship.relation().as_str(),
+                    relationship.profile().confidence().as_str(),
+                    relationship.recorded_at().to_rfc3339(),
+                    serde_json::to_string(relationship).expect("relationship should serialize")
+                ],
+            )
+            .expect("relationship should insert");
+    }
+
+    /// Reopens a store after mutating the file underneath it, so validation runs over the result.
+    fn reopen_after_mutation(
+        database: &std::path::Path,
+        mutate: impl FnOnce(&rusqlite::Connection),
+    ) -> Result<SqliteObservationStore, StoreError> {
+        drop(SqliteObservationStore::initialize(database).expect("store should initialize"));
+        let connection = rusqlite::Connection::open(database).expect("database should open");
+        mutate(&connection);
+        drop(connection);
+        SqliteObservationStore::open(database)
+    }
 
     /// Builds a valid immutable observation fixture.
     fn observation() -> Observation {
@@ -1415,6 +2462,21 @@ mod tests {
                 )
                 .expect("v1 observation should insert");
         }
+    }
+
+    /// Creates a valid v2 database, optionally containing one observation.
+    ///
+    /// v2 is the observation ledger plus harness receipts and no derived layer, which is exactly
+    /// the state this migration has to accept as input.
+    fn create_v2_database(path: &std::path::Path, existing: Option<&Observation>) {
+        create_v1_database(path, existing);
+        let connection = rusqlite::Connection::open(path).expect("v2 database should open");
+        connection
+            .execute_batch(RECEIPT_SCHEMA)
+            .expect("receipt schema should apply");
+        connection
+            .pragma_update(None, "user_version", 2)
+            .expect("v2 version should be set");
     }
 
     /// Captures non-internal schema objects for before-and-after comparisons.
@@ -2007,14 +3069,34 @@ mod tests {
             error,
             StoreError::MigrationRequired {
                 current_version: 1,
-                target_version: 2,
+                target_version: 3,
                 ..
             }
         ));
     }
 
     #[test]
-    /// Migrates v1 to v2 while preserving serialized observation documents byte-for-byte.
+    /// Requires explicit migration from a v2 database too, now that the derived layer exists.
+    fn open_v2_requires_explicit_migration() {
+        let temp_dir = TempDir::new().expect("temporary directory should be created");
+        let database = temp_dir.path().join("evidra.db");
+        create_v2_database(&database, None);
+
+        let error = SqliteObservationStore::open(&database)
+            .expect_err("ordinary open should require migration");
+
+        assert!(matches!(
+            error,
+            StoreError::MigrationRequired {
+                current_version: 2,
+                target_version: 3,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    /// Migrates v1 to v3 while preserving serialized observation documents byte-for-byte.
     fn initialize_migrates_v1_without_rewriting_observations() {
         let temp_dir = TempDir::new().expect("temporary directory should be created");
         let database = temp_dir.path().join("evidra.db");
@@ -2025,7 +3107,7 @@ mod tests {
             .query_row("SELECT document FROM observations", [], |row| row.get(0))
             .expect("document should exist");
 
-        let store = SqliteObservationStore::initialize(&database).expect("v1 should migrate to v2");
+        let store = SqliteObservationStore::initialize(&database).expect("v1 should migrate to v3");
         let after: String = store
             .connection
             .query_row("SELECT document FROM observations", [], |row| row.get(0))
@@ -2036,7 +3118,7 @@ mod tests {
             .expect("version should be readable");
 
         assert_eq!(before, after);
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
         assert_eq!(store.list(10).expect("list should succeed"), vec![expected]);
     }
 
@@ -2102,22 +3184,394 @@ mod tests {
     }
 
     #[test]
-    /// Leaves an already valid v2 schema unchanged during repeated initialization.
-    fn initialize_v2_is_non_mutating() {
+    /// Migrates v2 to v3 by adding the derived layer without rewriting any observation document.
+    fn migrate_v2_to_v3_preserves_observation_documents() {
+        let temp_dir = TempDir::new().expect("temporary directory should be created");
+        let database = temp_dir.path().join("evidra.db");
+        let expected = observation();
+        create_v2_database(&database, Some(&expected));
+        let before: String = rusqlite::Connection::open(&database)
+            .expect("database should open")
+            .query_row("SELECT document FROM observations", [], |row| row.get(0))
+            .expect("document should exist");
+
+        let store = SqliteObservationStore::initialize(&database).expect("v2 should migrate to v3");
+        let after: String = store
+            .connection
+            .query_row("SELECT document FROM observations", [], |row| row.get(0))
+            .expect("document should remain");
+        let version: i32 = store
+            .connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("version should be readable");
+
+        assert_eq!(before, after);
+        assert_eq!(version, 3);
+        assert_eq!(store.list(10).expect("list should succeed"), vec![expected]);
+    }
+
+    #[test]
+    /// Adds the derived tables to a v2 database that already held receipts.
+    fn migrate_v2_to_v3_adds_derived_tables_only() {
+        let temp_dir = TempDir::new().expect("temporary directory should be created");
+        let database = temp_dir.path().join("evidra.db");
+        create_v2_database(&database, None);
+        let before = schema_snapshot(&database);
+        let observation_count_before = rusqlite::Connection::open(&database)
+            .expect("database should open")
+            .query_row("SELECT COUNT(*) FROM observations", [], |row| {
+                row.get::<_, i32>(0)
+            })
+            .expect("count should be readable");
+
+        drop(SqliteObservationStore::initialize(&database).expect("v2 should migrate to v3"));
+
+        let after = schema_snapshot(&database);
+        let added = after
+            .iter()
+            .filter(|entry| !before.contains(entry))
+            .map(|(_, name, _)| name.clone())
+            .collect::<Vec<_>>();
+
+        for table in [
+            "derivations",
+            "derivation_facets",
+            "derivation_evidence",
+            "relationships",
+        ] {
+            assert!(
+                added.iter().any(|name| name == table),
+                "expected migration to add {table}"
+            );
+        }
+        // Set containment rather than positional equality: the snapshot is ordered by name, so
+        // adding objects shifts every later position even when nothing existing was rewritten.
+        for entry in &before {
+            assert!(
+                after.contains(entry),
+                "migration must not rewrite or drop an existing schema object: {entry:?}"
+            );
+        }
+        let observation_count_after = rusqlite::Connection::open(&database)
+            .expect("database should reopen")
+            .query_row("SELECT COUNT(*) FROM observations", [], |row| {
+                row.get::<_, i32>(0)
+            })
+            .expect("count should remain readable");
+        assert_eq!(observation_count_before, observation_count_after);
+    }
+
+    #[test]
+    /// Leaves the schema version at v2 when derived DDL fails validation after being applied.
+    fn failed_derived_migration_remains_v2() {
+        let temp_dir = TempDir::new().expect("temporary directory should be created");
+        let database = temp_dir.path().join("evidra.db");
+        create_v2_database(&database, None);
+        let connection = rusqlite::Connection::open(&database).expect("database should open");
+        connection
+            .execute_batch(
+                "CREATE TABLE derivation_facets (
+                     derivation_id TEXT NOT NULL,
+                     namespace TEXT NOT NULL
+                 );",
+            )
+            .expect("malformed preexisting derived table should create");
+        drop(connection);
+
+        assert!(SqliteObservationStore::initialize(&database).is_err());
+        let connection = rusqlite::Connection::open(&database).expect("database should reopen");
+        let version: i32 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("version should remain readable");
+        let created_trigger: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'trigger' AND name = 'derivations_reject_update')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("trigger state should be readable");
+
+        assert_eq!(version, 2);
+        assert!(!created_trigger);
+    }
+
+    #[test]
+    /// Accepts a stored derivation whose indexed projections match its document.
+    fn derived_rows_survive_validation() {
+        let temp_dir = TempDir::new().expect("temporary directory should be created");
+        let database = temp_dir.path().join("evidra.db");
+        let derivation = facet_derivation();
+
+        let store = reopen_after_mutation(&database, |connection| {
+            insert_derivation(connection, &derivation, false);
+        })
+        .expect("matching projections should validate");
+
+        let stored: String = store
+            .connection
+            .query_row(
+                "SELECT document FROM derivations WHERE id = ?1",
+                [derivation.id().as_str()],
+                |row| row.get(0),
+            )
+            .expect("derivation should be readable");
+        assert_eq!(
+            stored,
+            serde_json::to_string(&derivation).expect("serializes")
+        );
+    }
+
+    #[test]
+    /// Rejects a derivation whose indexed facet rows drifted from its document.
+    ///
+    /// This is the check that matters most for current-view queries: a stale projection would
+    /// otherwise answer with a value the record no longer claims.
+    fn derived_facet_drift_is_rejected() {
+        let temp_dir = TempDir::new().expect("temporary directory should be created");
+        let database = temp_dir.path().join("evidra.db");
+        let derivation = facet_derivation();
+
+        let error = reopen_after_mutation(&database, |connection| {
+            insert_derivation(connection, &derivation, true);
+        })
+        .expect_err("drifted facet rows must not validate");
+
+        assert!(
+            matches!(error, StoreError::DerivedFacetMismatch { .. }),
+            "expected a facet projection mismatch, got {error:?}"
+        );
+    }
+
+    #[test]
+    /// Rejects a derivation whose indexed facet rows are missing rather than merely wrong.
+    ///
+    /// Written as an insert without facets rather than a delete, because the append-only trigger
+    /// would refuse the delete and the test would never reach validation.
+    fn derived_missing_facet_rows_are_rejected() {
+        let temp_dir = TempDir::new().expect("temporary directory should be created");
+        let database = temp_dir.path().join("evidra.db");
+        let derivation = facet_derivation();
+        let document = serde_json::to_string(&derivation).expect("derivation should serialize");
+
+        let error = reopen_after_mutation(&database, |connection| {
+            connection
+                .execute(
+                    "INSERT INTO derivations (id, kind, recorded_at, supersedes, document)
+                     VALUES (?1, ?2, ?3, NULL, ?4)",
+                    rusqlite::params![
+                        derivation.id().as_str(),
+                        derivation.kind().as_str(),
+                        derivation.recorded_at().to_rfc3339(),
+                        document
+                    ],
+                )
+                .expect("row should insert");
+        })
+        .expect_err("a derivation with no indexed facet rows must not validate");
+
+        assert!(
+            matches!(error, StoreError::DerivedFacetMismatch { .. }),
+            "expected a facet projection mismatch, got {error:?}"
+        );
+    }
+
+    #[test]
+    /// Rejects a derivation row whose indexed kind disagrees with its document.
+    fn derived_column_drift_is_rejected() {
+        let temp_dir = TempDir::new().expect("temporary directory should be created");
+        let database = temp_dir.path().join("evidra.db");
+        let derivation = facet_derivation();
+        let document = serde_json::to_string(&derivation).expect("derivation should serialize");
+
+        let error = reopen_after_mutation(&database, |connection| {
+            // Written with the wrong kind column rather than updated, because the append-only
+            // trigger would refuse the update and the test would never reach validation.
+            connection
+                .execute(
+                    "INSERT INTO derivations (id, kind, recorded_at, supersedes, document)
+                     VALUES (?1, 'aggregate', ?2, NULL, ?3)",
+                    rusqlite::params![derivation.id().as_str(), DERIVED_AT, document],
+                )
+                .expect("row should insert");
+        })
+        .expect_err("an indexed kind that contradicts the document must not validate");
+
+        assert!(
+            matches!(error, StoreError::DerivedMetadataMismatch { .. }),
+            "expected a metadata mismatch, got {error:?}"
+        );
+    }
+
+    #[test]
+    /// Rejects a derived record whose document cannot be read back as a domain record.
+    fn derived_unreadable_document_is_rejected() {
+        let temp_dir = TempDir::new().expect("temporary directory should be created");
+        let database = temp_dir.path().join("evidra.db");
+
+        let error = reopen_after_mutation(&database, |connection| {
+            connection
+                .execute(
+                    "INSERT INTO derivations (id, kind, recorded_at, supersedes, document)
+                     VALUES ('__evidra_bogus__', 'facet', ?1, NULL, '{\"id\":\"nonsense\"}')",
+                    [DERIVED_AT],
+                )
+                .expect("row should insert");
+        })
+        .expect_err("a document that is not a derivation must not validate");
+
+        assert!(
+            matches!(error, StoreError::InvalidDerivedRecord { .. }),
+            "expected an unreadable derived record, got {error:?}"
+        );
+    }
+
+    #[test]
+    /// Rejects a derived trigger that has been redefined to do nothing.
+    ///
+    /// A trigger that exists under the right name but has been emptied passes any name-only check,
+    /// which is why the definitions are compared as normalized text.
+    fn tampered_derived_trigger_is_rejected() {
+        let temp_dir = TempDir::new().expect("temporary directory should be created");
+        let database = temp_dir.path().join("evidra.db");
+        drop(SqliteObservationStore::initialize(&database).expect("store should initialize"));
+        let connection = rusqlite::Connection::open(&database).expect("database should open");
+        connection
+            .execute_batch(
+                "DROP TRIGGER relationships_reject_delete;
+                 CREATE TRIGGER relationships_reject_delete
+                 BEFORE DELETE ON relationships
+                 BEGIN SELECT 1; END;",
+            )
+            .expect("test should neuter the trigger");
+        drop(connection);
+
+        let error =
+            SqliteObservationStore::open(&database).expect_err("a neutered trigger must not pass");
+
+        assert!(
+            matches!(error, StoreError::IncompleteSchema { .. }),
+            "expected an incomplete schema, got {error:?}"
+        );
+    }
+
+    #[test]
+    /// Blocks updates, deletes, replacements, and duplicate inserts on every derived table.
+    fn derived_tables_reject_mutation() {
+        let temp_dir = TempDir::new().expect("temporary directory should be created");
+        let database = temp_dir.path().join("evidra.db");
+        let derivation = facet_derivation();
+        let other = facet_derivation();
+        let edge = edge_relationship(derivation.id(), other.id());
+        let id_string = derivation.id().as_str();
+        let probe_id = id_string.as_str();
+        let edge_id = edge.id().as_str();
+        let evidence_target = edge.from().key();
+        let store = reopen_after_mutation(&database, |connection| {
+            insert_derivation(connection, &derivation, false);
+            insert_derivation(connection, &other, false);
+            insert_relationship(connection, &edge);
+            connection
+                .execute(
+                    "INSERT INTO derivation_evidence (derivation_id, target_key, role, recorded_at)
+                     VALUES (?1, ?2, 'refuting', ?3)",
+                    rusqlite::params![probe_id, evidence_target, DERIVED_AT],
+                )
+                .expect("evidence should insert");
+        })
+        .expect("matching projections should validate");
+        let connection = store.connection;
+
+        for (label, result) in [
+            (
+                "derivations update",
+                connection.execute(
+                    "UPDATE derivations SET kind = 'facet' WHERE id = ?1",
+                    [probe_id],
+                ),
+            ),
+            (
+                "derivations delete",
+                connection.execute("DELETE FROM derivations WHERE id = ?1", [probe_id]),
+            ),
+            (
+                "derivations replace",
+                connection.execute(
+                    "INSERT OR REPLACE INTO derivations
+                     (id, kind, recorded_at, supersedes, document)
+                     VALUES (?1, 'facet', ?2, NULL, '{}')",
+                    rusqlite::params![probe_id, DERIVED_AT],
+                ),
+            ),
+            (
+                "derivation facets delete",
+                connection.execute(
+                    "DELETE FROM derivation_facets WHERE derivation_id = ?1",
+                    [probe_id],
+                ),
+            ),
+            (
+                "derivation evidence delete",
+                connection.execute(
+                    "DELETE FROM derivation_evidence WHERE derivation_id = ?1",
+                    [probe_id],
+                ),
+            ),
+            (
+                "relationships delete",
+                connection.execute(
+                    "DELETE FROM relationships WHERE id = ?1",
+                    [edge_id.as_str()],
+                ),
+            ),
+        ] {
+            assert!(result.is_err(), "expected {label} to be blocked");
+        }
+    }
+
+    #[test]
+    /// Rejects a facet row whose slot disagrees with which value column is populated.
+    fn facet_slot_mismatch_is_rejected() {
+        let temp_dir = TempDir::new().expect("temporary directory should be created");
+        let database = temp_dir.path().join("evidra.db");
+        let derivation = facet_derivation();
+        drop(SqliteObservationStore::initialize(&database).expect("store should initialize"));
+
+        let connection = rusqlite::Connection::open(&database).expect("database should reopen");
+        insert_derivation(&connection, &derivation, false);
+        let result = connection.execute(
+            "INSERT INTO derivation_facets
+             (derivation_id, namespace, name, slot, text_value, integer_value, boolean_value,
+              confidence, freshness, recorded_at)
+             VALUES (?1, 'probe', 'mismatch', 'text', NULL, 7, NULL,
+                     'weak', 'current', ?2)",
+            rusqlite::params![derivation.id().as_str(), DERIVED_AT],
+        );
+
+        assert!(
+            result.is_err(),
+            "a text slot with only an integer value must be refused"
+        );
+        drop(connection);
+    }
+
+    #[test]
+    /// Leaves an already valid v3 schema unchanged during repeated initialization.
+    fn initialize_v3_is_non_mutating() {
         let temp_dir = TempDir::new().expect("temporary directory should be created");
         let database = temp_dir.path().join("evidra.db");
         drop(SqliteObservationStore::initialize(&database).expect("store should initialize"));
         let before = schema_snapshot(&database);
 
-        drop(SqliteObservationStore::initialize(&database).expect("v2 init should be idempotent"));
+        drop(SqliteObservationStore::initialize(&database).expect("v3 init should be idempotent"));
         let after = schema_snapshot(&database);
 
         assert_eq!(before, after);
     }
 
     #[test]
-    /// Creates a new database at v2 with the harness receipt table present.
-    fn new_database_is_created_as_valid_v2() {
+    /// Creates a new database at v3 with the receipt and derived tables present.
+    fn new_database_is_created_as_valid_v3() {
         let temp_dir = TempDir::new().expect("temporary directory should be created");
         let database = temp_dir.path().join("evidra.db");
         let store = SqliteObservationStore::initialize(&database).expect("store should initialize");
@@ -2125,18 +3579,26 @@ mod tests {
             .connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("version should be readable");
-        let receipts: bool = store
-            .connection
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_master
-                 WHERE type = 'table' AND name = 'agent_harness_receipts')",
-                [],
-                |row| row.get(0),
-            )
-            .expect("receipt table should be queryable");
 
-        assert_eq!(version, 2);
-        assert!(receipts);
+        for table in [
+            "agent_harness_receipts",
+            "derivations",
+            "derivation_facets",
+            "derivation_evidence",
+            "relationships",
+        ] {
+            let present: bool = store
+                .connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                     WHERE type = 'table' AND name = ?1)",
+                    [table],
+                    |row| row.get(0),
+                )
+                .expect("table presence should be queryable");
+            assert!(present, "expected a v3 database to contain {table}");
+        }
+        assert_eq!(version, 3);
     }
 
     #[test]

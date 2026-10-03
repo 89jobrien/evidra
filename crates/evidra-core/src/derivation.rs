@@ -488,6 +488,96 @@ impl FacetValueSlot {
     }
 }
 
+/// One facet projected by a derivation: the address it is stored at and the value it carries.
+///
+/// Namespace and name are both required, because a facet is only useful if a [`FacetFilter`] can
+/// name it and a [`CurrentFacet`] can report it. A single opaque key would make a projection
+/// impossible to select and impossible to read back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FacetProjection {
+    namespace: String,
+    name: String,
+    value: FacetValue,
+}
+
+/// The wire shape a projection is deserialized from, before its invariants are re-checked.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawFacetProjection {
+    namespace: String,
+    name: String,
+    value: FacetValue,
+}
+
+impl<'de> Deserialize<'de> for FacetProjection {
+    /// Deserializes a projection while re-checking that both address parts are present.
+    ///
+    /// Deriving this would let a stored record carry a blank namespace or name, because serde
+    /// writes private fields directly and never calls [`FacetProjection::new`].
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawFacetProjection::deserialize(deserializer)?;
+        Self::new(raw.namespace, raw.name, raw.value).map_err(serde::de::Error::custom)
+    }
+}
+
+impl FacetProjection {
+    /// Creates a projection addressed by namespace and name.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DerivationError::BlankField`] when `namespace` or `name` is blank.
+    pub fn new(
+        namespace: impl Into<String>,
+        name: impl Into<String>,
+        value: FacetValue,
+    ) -> Result<Self, DerivationError> {
+        let namespace = namespace.into();
+        let name = name.into();
+        if namespace.trim().is_empty() {
+            return Err(DerivationError::BlankField {
+                field: "facet namespace",
+            });
+        }
+        if name.trim().is_empty() {
+            return Err(DerivationError::BlankField {
+                field: "facet name",
+            });
+        }
+        Ok(Self {
+            namespace,
+            name,
+            value,
+        })
+    }
+
+    /// Returns the facet namespace.
+    #[must_use]
+    pub fn namespace(&self) -> &str {
+        &self.namespace
+    }
+
+    /// Returns the facet name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the projected value.
+    #[must_use]
+    pub fn value(&self) -> &FacetValue {
+        &self.value
+    }
+
+    /// Returns the slot that stores this value.
+    #[must_use]
+    pub fn slot(&self) -> FacetValueSlot {
+        FacetValueSlot::of(&self.value)
+    }
+}
+
 /// What kind of thing a derivation computed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -642,7 +732,7 @@ pub struct DerivationDraft {
     /// What produced the result.
     pub method: DerivationMethod,
     /// Projected facets, empty for non-facet kinds.
-    pub facets: Vec<(String, FacetValue)>,
+    pub facets: Vec<FacetProjection>,
     /// Caller-supplied record time.
     pub recorded_at: DateTime<Utc>,
     /// The derivation this one replaces, if any.
@@ -657,7 +747,7 @@ pub struct Derivation {
     scope: DerivationScope,
     profile: UncertaintyProfile,
     method: DerivationMethod,
-    facets: Vec<(String, FacetValue)>,
+    facets: Vec<FacetProjection>,
     recorded_at: DateTime<Utc>,
     supersedes: Option<DerivationId>,
 }
@@ -671,7 +761,7 @@ struct RawDerivation {
     scope: DerivationScope,
     profile: UncertaintyProfile,
     method: DerivationMethod,
-    facets: Vec<(String, FacetValue)>,
+    facets: Vec<FacetProjection>,
     recorded_at: DateTime<Utc>,
     supersedes: Option<DerivationId>,
 }
@@ -702,8 +792,7 @@ impl Derivation {
     ///
     /// # Errors
     ///
-    /// Returns [`DerivationError::BlankField`] when any facet namespace is blank,
-    /// [`DerivationError::SelfSupersession`] when `supersedes` names this record,
+    /// Returns [`DerivationError::SelfSupersession`] when `supersedes` names this record,
     /// [`DerivationError::FacetKindMismatch`] when a [`DerivationKind::Facet`] derivation carries no
     /// facets or a non-facet kind carries some, and [`DerivationError::UngatedDisposition`] when an
     /// assisted method records a band above [`ConfidenceBand::Weak`].
@@ -732,14 +821,6 @@ impl Derivation {
     ///
     /// Returns the same errors as [`Derivation::new`].
     fn validate(&self) -> Result<(), DerivationError> {
-        for (namespace, _) in &self.facets {
-            if namespace.trim().is_empty() {
-                return Err(DerivationError::BlankField {
-                    field: "facet namespace",
-                });
-            }
-        }
-
         if self.supersedes == Some(self.id) {
             return Err(DerivationError::SelfSupersession);
         }
@@ -787,7 +868,7 @@ impl Derivation {
 
     /// Returns the projected facets.
     #[must_use]
-    pub fn facets(&self) -> &[(String, FacetValue)] {
+    pub fn facets(&self) -> &[FacetProjection] {
         &self.facets
     }
 
@@ -1119,8 +1200,8 @@ mod tests {
     use super::{
         ConfidenceBand, Contradiction, CurrentFacet, Derivation, DerivationDraft, DerivationError,
         DerivationId, DerivationKind, DerivationMethod, DerivationScope, EvidenceRole,
-        EvidenceTarget, FacetCount, FacetFilter, FacetValueSlot, Freshness, RelationKind,
-        Relationship, RelationshipId, ScopeFidelity, UncertaintyProfile,
+        EvidenceTarget, FacetCount, FacetFilter, FacetProjection, FacetValueSlot, Freshness,
+        RelationKind, Relationship, RelationshipId, ScopeFidelity, UncertaintyProfile,
     };
     use crate::{
         FacetValue, Observation, ObservationDraft, ObservationId, ObservationKind, Provenance,
@@ -1171,10 +1252,19 @@ mod tests {
             scope: scope(),
             profile: UncertaintyProfile::deterministic(),
             method: deterministic(),
-            facets: vec![("outcome".into(), FacetValue::Text("verified-fail".into()))],
+            facets: vec![projection(
+                "friction",
+                "outcome",
+                FacetValue::Text("verified-fail".into()),
+            )],
             recorded_at: Utc::now(),
             supersedes: None,
         }
+    }
+
+    /// Builds one addressed facet projection.
+    fn projection(namespace: &str, name: &str, value: FacetValue) -> FacetProjection {
+        FacetProjection::new(namespace, name, value).expect("projection should validate")
     }
 
     /// Confirms a facet derivation records its identity, scope, and facets.
@@ -1561,7 +1651,9 @@ mod tests {
                 "scope": "exact"
               }},
               "method": {{"kind": "deterministic", "version": "1"}},
-              "facets": [["outcome", {{"Text": "verified-fail"}}]],
+              "facets": [
+                {{"namespace": "friction", "name": "outcome", "value": "verified-fail"}}
+              ],
               "recorded_at": "2026-10-02T09:00:00Z",
               "supersedes": "{id}"
             }}"#
@@ -1643,8 +1735,8 @@ mod tests {
 
         use super::{
             ConfidenceBand, Contradiction, Derivation, DerivationDraft, DerivationId,
-            DerivationKind, DerivationMethod, DerivationScope, EvidenceTarget, FacetValueSlot,
-            Freshness, RelationKind, Relationship, RelationshipId, ScopeFidelity,
+            DerivationKind, DerivationMethod, DerivationScope, EvidenceTarget, FacetProjection,
+            FacetValueSlot, Freshness, RelationKind, Relationship, RelationshipId, ScopeFidelity,
             UncertaintyProfile,
         };
         use crate::{FacetValue, SubjectRef};
@@ -1727,6 +1819,14 @@ mod tests {
                 any::<i64>().prop_map(FacetValue::Integer),
                 any::<bool>().prop_map(FacetValue::Boolean),
             ]
+        }
+
+        /// Any addressed facet projection.
+        fn projection() -> impl Strategy<Value = FacetProjection> {
+            (token(), token(), facet_value()).prop_map(|(namespace, name, value)| {
+                FacetProjection::new(namespace, name, value)
+                    .expect("generated projection is not blank")
+            })
         }
 
         /// Any confidence band.
@@ -1816,7 +1916,7 @@ mod tests {
                 freshness(),
                 contradiction(),
                 fidelity(),
-                prop::collection::vec((token(), facet_value()), 1..4),
+                prop::collection::vec(projection(), 1..4),
                 instant(),
             )
                 .prop_filter(
@@ -2036,7 +2136,10 @@ mod tests {
                         model: "test-model".into(),
                         prompt_version: "p1".into(),
                     },
-                    facets: vec![("outcome".into(), FacetValue::Text(value.clone()))],
+                    facets: vec![
+                        FacetProjection::new("friction", "outcome", FacetValue::Text(value.clone()))
+                            .expect("projection should validate"),
+                    ],
                     recorded_at,
                     supersedes: None,
                 })

@@ -10,11 +10,21 @@
 
 use chrono::{Duration, TimeZone as _, Utc};
 use evidra_core::{
-    ConfidenceBand, Derivation, DerivationDraft, DerivationId, DerivationKind, DerivationMethod,
-    DerivationScope, EvidenceRole, EvidenceTarget, FacetFilter, FacetValue, FacetValueSlot,
-    Freshness, RelationKind, Relationship, RelationshipId, SubjectRef, UncertaintyProfile,
+    ConfidenceBand, Derivation, DerivationDraft, DerivationError, DerivationId, DerivationKind,
+    DerivationMethod, DerivationScope, EvidenceRole, EvidenceTarget, FacetFilter, FacetProjection,
+    FacetValue, FacetValueSlot, Freshness, RelationKind, Relationship, RelationshipId, SubjectRef,
+    UncertaintyProfile,
 };
 use std::error::Error;
+
+/// Builds one addressed facet projection.
+fn facet(
+    namespace: &str,
+    name: &str,
+    value: FacetValue,
+) -> Result<FacetProjection, DerivationError> {
+    FacetProjection::new(namespace, name, value)
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
     let subject = SubjectRef::new("repository", "/workspace")?;
@@ -52,8 +62,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         // Facets are banded, not raw: the question is "is this a fast or slow failure", and a
         // millisecond value cannot answer it (ADR-009).
         facets: vec![
-            ("outcome".into(), FacetValue::Text("verified-fail".into())),
-            ("session".into(), FacetValue::Text("m".into())),
+            facet(
+                "friction",
+                "outcome",
+                FacetValue::Text("verified-fail".into()),
+            )?,
+            facet("friction", "session", FacetValue::Text("m".into()))?,
         ],
         recorded_at,
         supersedes: None,
@@ -78,8 +92,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             version: "engine-0.1.0".into(),
         },
         facets: vec![
-            ("outcome".into(), FacetValue::Text("verified-fail".into())),
-            ("session".into(), FacetValue::Text("s".into())),
+            facet(
+                "friction",
+                "outcome",
+                FacetValue::Text("verified-fail".into()),
+            )?,
+            facet("friction", "session", FacetValue::Text("s".into()))?,
         ],
         recorded_at,
         supersedes: Some(failed.id()),

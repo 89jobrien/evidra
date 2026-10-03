@@ -37,8 +37,8 @@ mod ports;
 pub use derivation::{
     ConfidenceBand, Contradiction, CurrentFacet, Derivation, DerivationDraft, DerivationError,
     DerivationId, DerivationKind, DerivationMethod, DerivationScope, EvidenceRole, EvidenceTarget,
-    FacetCount, FacetFilter, FacetValueSlot, Freshness, RelationKind, Relationship, RelationshipId,
-    ScopeFidelity, UncertaintyProfile,
+    FacetCount, FacetFilter, FacetProjection, FacetValueSlot, Freshness, RelationKind,
+    Relationship, RelationshipId, ScopeFidelity, UncertaintyProfile,
 };
 pub use harness::{
     AgentHarnessEvent, AgentHarnessEventDraft, AgentHarnessEventError, AgentHarnessEventIdentity,

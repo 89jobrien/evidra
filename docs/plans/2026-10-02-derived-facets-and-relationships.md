@@ -18,7 +18,7 @@ recurring failure patterns become queryable without re-parsing every payload.
 - **New traits/types**: `DerivationStore`, `RelationshipStore`, `Derivation`, `Relationship`,
   `UncertaintyProfile`, `ConfidenceBand`, `Freshness`, `Contradiction`, `ScopeFidelity`,
   `RelationKind`, `EvidenceRole`, `EvidenceTarget`, `DerivationScope`, `FacetValueSlot`,
-  `CurrentFacet`, `FacetCount`
+  `FacetProjection`, `CurrentFacet`, `FacetCount`
 - **Data flow**: observation ledger to scoped selection to banded facet projection to derivation with
   evidence links to indexed facet columns; relationships connect derivations and observations in
   either direction
@@ -87,6 +87,7 @@ compiling and integrity-checking them; nothing here is load-bearing yet.
 
 ### Task 2: Schema v3 and migration
 
+**Status**: complete
 **Crate**: `evidra-store`
 **File(s)**: `crates/evidra-store/src/sqlite.rs`
 **Run**: `cargo nextest run -p evidra-store`
@@ -97,6 +98,41 @@ compiling and integrity-checking them; nothing here is load-bearing yet.
    projections on `relationships`.
 3. Add `validate_v3`, extend the migration ladder, keep `evidra init` as the only entry point.
 4. Clippy clean, then commit.
+
+Designing the schema exposed an inconsistency in Task 1 and forced a domain change.
+`Derivation::facets` was `Vec<(String, FacetValue)>` while both `FacetFilter` and `CurrentFacet` are
+namespace-and-name pairs, so a projected facet could be neither selected nor reported back.
+`DerivationDraft::facets` is now `Vec<FacetProjection>`, a named type with its own validating
+constructor and its own manual `Deserialize` for the same reason the record types have one. The
+tuple would have round-tripped just as well; it would not have been readable.
+
+Three deliberate decisions in the schema:
+
+- The facet slot `CHECK` also asserts that only the value column matching the slot is populated.
+  This is stronger than the domain, which refuses to construct the mismatch in the first place. A
+  bug in a writer then cannot produce a row the domain would have rejected.
+- `relationships` has no foreign key on `from_key` or `to_key`. Those columns may name either an
+  observation or a derivation, so no single SQL foreign key can express the union. This is a
+  deliberate hole, not an oversight, and edge integrity is checked by walking both ends in
+  `validate_derived_rows` instead.
+- `derivations.supersedes` is indexed because ADR-008 resolves the current view by walking the
+  chain, and a chain that cannot be walked cheaply cannot be walked at all.
+
+Nothing writes derived rows yet, so `validate_derived_rows` would otherwise pass vacuously and prove
+nothing. The tests insert derivations and projections directly and then try to defeat the
+validator: drifted facet values, missing facet rows, an indexed column contradicting its document, a
+document that is not a domain record, and a trigger emptied out under its own name. Without those
+the validation would look thorough while checking nothing.
+
+Two defects in this task's own work, both caught by running rather than reading: an append-only
+probe labelled "duplicate insert" that used a different primary key, so the trigger correctly did
+not fire and the probe wrongly reported an unguarded table; and a migration test that compared
+schema snapshots positionally when the snapshot is name-ordered, so adding tables shifted every
+later position and looked like a rewrite.
+
+Separately, `cargo nextest run` intermittently reports one leaky test. It is in the two
+`concurrent_*` append-race tests introduced in the baseline commit, not in anything added here.
+Worth fixing before it becomes CI noise.
 
 ### Task 3: Deterministic engine
 
