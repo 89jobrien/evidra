@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use miette::Diagnostic;
 use serde::Serialize;
 use thiserror::Error;
 
@@ -148,16 +149,19 @@ impl AgentHarnessIngestSummary {
 }
 
 /// Source-safe operational failure category for inbox ingestion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error, Diagnostic)]
 pub enum AgentHarnessIngestError {
     /// Inbox lifecycle operation failed.
     #[error("ingest failed: inbox")]
+    #[diagnostic(code(evidra::agent_harness_ingest::inbox))]
     Inbox,
     /// Validated event conversion failed.
     #[error("ingest failed: conversion")]
+    #[diagnostic(code(evidra::agent_harness_ingest::conversion))]
     Conversion,
     /// Observation persistence failed.
     #[error("ingest failed: store")]
+    #[diagnostic(code(evidra::agent_harness_ingest::store))]
     Store,
 }
 

@@ -15,6 +15,7 @@ use evidra_core::{
     HarnessRef, HarnessSessionId, Observation, ObservationError, ObservationStore, RedactionRecord,
     Relationship, SourceEventId, SourceRef, SubjectRef,
 };
+use miette::Diagnostic;
 use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use thiserror::Error;
 
@@ -563,10 +564,11 @@ fn insert_observation(
 }
 
 /// Error returned by the SQLite observation store.
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Diagnostic)]
 pub enum StoreError {
     /// The repository-local database has not been initialized.
     #[error("Evidra is not initialized at {path}; run `evidra init` first")]
+    #[diagnostic(code(evidra::store::not_initialized))]
     NotInitialized {
         /// Expected database path.
         path: PathBuf,
@@ -574,6 +576,7 @@ pub enum StoreError {
 
     /// A database parent directory could not be created.
     #[error("failed to create database directory {path}: {source}")]
+    #[diagnostic(code(evidra::store::create_parent))]
     CreateParent {
         /// Directory that could not be created.
         path: PathBuf,
@@ -584,6 +587,7 @@ pub enum StoreError {
 
     /// SQLite could not open the configured database path.
     #[error("failed to open SQLite database {path}: {source}")]
+    #[diagnostic(code(evidra::store::open))]
     Open {
         /// Database path that could not be opened.
         path: PathBuf,
@@ -594,6 +598,7 @@ pub enum StoreError {
 
     /// An observation with the same identity already exists.
     #[error("observation {id} already exists")]
+    #[diagnostic(code(evidra::store::duplicate_observation))]
     DuplicateObservation {
         /// Duplicate observation identity.
         id: String,
@@ -601,10 +606,12 @@ pub enum StoreError {
 
     /// Harness observations require an atomic idempotency receipt.
     #[error("agent harness observations must be appended with an idempotency receipt")]
+    #[diagnostic(code(evidra::store::harness_observation_requires_receipt))]
     HarnessObservationRequiresReceipt,
 
     /// A persisted observation no longer matches its integrity digest.
     #[error("observation {id} failed integrity verification")]
+    #[diagnostic(code(evidra::store::integrity_mismatch))]
     IntegrityMismatch {
         /// Identity of the altered or corrupted observation.
         id: String,
@@ -612,6 +619,7 @@ pub enum StoreError {
 
     /// Indexed SQLite columns disagree with the signed observation document.
     #[error("observation {id} has inconsistent indexed metadata")]
+    #[diagnostic(code(evidra::store::metadata_mismatch))]
     MetadataMismatch {
         /// Identity from the signed observation document.
         id: String,
@@ -619,6 +627,7 @@ pub enum StoreError {
 
     /// A store path is a symbolic link and could redirect writes.
     #[error("refusing symbolic-link store path {path}")]
+    #[diagnostic(code(evidra::store::symlink_path))]
     SymlinkPath {
         /// Symbolic link that was rejected.
         path: PathBuf,
@@ -626,6 +635,7 @@ pub enum StoreError {
 
     /// A store path could not be inspected safely.
     #[error("failed to inspect store path {path}: {source}")]
+    #[diagnostic(code(evidra::store::inspect_path))]
     InspectPath {
         /// Path that could not be inspected.
         path: PathBuf,
@@ -638,6 +648,7 @@ pub enum StoreError {
     #[error(
         "database {path} uses schema v{current_version}; back it up and run `evidra init` to migrate to v{target_version}"
     )]
+    #[diagnostic(code(evidra::store::migration_required))]
     MigrationRequired {
         /// Legacy database path.
         path: PathBuf,
@@ -651,6 +662,7 @@ pub enum StoreError {
     #[error(
         "database {path} is not an Evidra schema (application_id={application_id}, user_version={user_version})"
     )]
+    #[diagnostic(code(evidra::store::unexpected_database))]
     UnexpectedDatabase {
         /// Rejected database path.
         path: PathBuf,
@@ -662,6 +674,7 @@ pub enum StoreError {
 
     /// An expected table, index, or append-only trigger is missing.
     #[error("database {path} is missing required schema object {object}")]
+    #[diagnostic(code(evidra::store::incomplete_schema))]
     IncompleteSchema {
         /// Database with an incomplete schema.
         path: PathBuf,
@@ -671,6 +684,7 @@ pub enum StoreError {
 
     /// The database schema permits a mutation forbidden by append-only semantics.
     #[error("database {path} failed append-only control probe for {operation}")]
+    #[diagnostic(code(evidra::store::incomplete_append_only_control))]
     IncompleteAppendOnlyControl {
         /// Database with ineffective controls.
         path: PathBuf,
@@ -680,10 +694,12 @@ pub enum StoreError {
 
     /// A persisted harness receipt disagrees with its observation.
     #[error("invalid persisted agent harness receipt")]
+    #[diagnostic(code(evidra::store::invalid_harness_receipt))]
     InvalidHarnessReceipt,
 
     /// The database schema permits a derived mutation forbidden by append-only semantics.
     #[error("database {path} does not enforce the {constraint} constraint on derived records")]
+    #[diagnostic(code(evidra::store::incomplete_derived_constraint))]
     IncompleteDerivedConstraint {
         /// Database with an ineffective derived constraint.
         path: PathBuf,
@@ -693,6 +709,7 @@ pub enum StoreError {
 
     /// A persisted derived document could not be read back as a domain record.
     #[error("derived record {id} could not be deserialized")]
+    #[diagnostic(code(evidra::store::invalid_derived_record))]
     InvalidDerivedRecord {
         /// Identity of the unreadable record.
         id: String,
@@ -700,6 +717,7 @@ pub enum StoreError {
 
     /// Indexed derived columns disagree with the stored derived document.
     #[error("derived record {id} has inconsistent indexed metadata")]
+    #[diagnostic(code(evidra::store::derived_metadata_mismatch))]
     DerivedMetadataMismatch {
         /// Identity from the stored derived document.
         id: String,
@@ -707,6 +725,7 @@ pub enum StoreError {
 
     /// Indexed facet rows disagree with the facets recorded on the derivation.
     #[error("derived record {id} has facet rows that disagree with its document")]
+    #[diagnostic(code(evidra::store::derived_facet_mismatch))]
     DerivedFacetMismatch {
         /// Identity of the record whose projection drifted.
         id: String,
@@ -714,10 +733,12 @@ pub enum StoreError {
 
     /// Migration changed a stored observation document it must not have touched.
     #[error("schema migration altered stored observation documents")]
+    #[diagnostic(code(evidra::store::invalid_derived_schema))]
     InvalidDerivedSchema,
 
     /// Store permissions could not be restricted.
     #[error("failed to set private permissions on {path}: {source}")]
+    #[diagnostic(code(evidra::store::set_permissions))]
     SetPermissions {
         /// Path whose permissions could not be changed.
         path: PathBuf,
@@ -732,6 +753,7 @@ pub enum StoreError {
 
     /// Observation JSON could not be encoded or decoded.
     #[error("observation serialization failed")]
+    #[diagnostic(code(evidra::store::serialization))]
     Serialization,
 
     /// Observation integrity verification could not be completed.

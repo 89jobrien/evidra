@@ -8,6 +8,7 @@
 use std::fmt;
 
 use chrono::{DateTime, Utc};
+use miette::Diagnostic;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -619,22 +620,26 @@ impl fmt::Debug for AgentHarnessObservation {
 }
 
 /// Error returned while constructing or validating a harness observation.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Error, Diagnostic)]
 pub enum AgentHarnessObservationError {
     /// A receipt identity component was blank.
     #[error("{field} must not be blank")]
+    #[diagnostic(code(evidra::agent_harness_observation::blank_identity_field))]
     BlankIdentityField {
         /// Name of the blank identity field.
         field: &'static str,
     },
     /// A semantic digest was not lowercase SHA-256.
     #[error("invalid agent harness event digest")]
+    #[diagnostic(code(evidra::agent_harness_observation::invalid_event_digest))]
     InvalidEventDigest,
     /// The normalized payload could not be serialized.
     #[error("failed to serialize agent harness observation payload")]
+    #[diagnostic(code(evidra::agent_harness_observation::payload_serialization))]
     PayloadSerialization,
     /// Persisted harness payload data violated the versioned contract.
     #[error("invalid persisted agent harness observation payload")]
+    #[diagnostic(code(evidra::agent_harness_observation::invalid_persisted_payload))]
     InvalidPersistedPayload,
     /// Observation construction failed.
     #[error("agent harness observation construction failed: {0}")]
@@ -863,10 +868,11 @@ impl_redacted_debug!(
 );
 
 /// Error returned when agent-harness evidence violates the normalized contract.
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Diagnostic)]
 pub enum AgentHarnessEventError {
     /// A required text field was blank.
     #[error("{field} must not be blank")]
+    #[diagnostic(code(evidra::agent_harness_event::blank_field))]
     BlankField {
         /// Name of the invalid field.
         field: &'static str,
@@ -874,10 +880,12 @@ pub enum AgentHarnessEventError {
 
     /// The source category was not `agent-harness`.
     #[error("agent harness source kind must be agent-harness")]
+    #[diagnostic(code(evidra::agent_harness_event::unexpected_source_kind))]
     UnexpectedSourceKind,
 
     /// An event included more excerpts than the contract permits.
     #[error("event has {count} excerpts; maximum is {maximum}")]
+    #[diagnostic(code(evidra::agent_harness_event::too_many_excerpts))]
     TooManyExcerpts {
         /// Number of excerpts supplied.
         count: usize,
@@ -887,6 +895,7 @@ pub enum AgentHarnessEventError {
 
     /// A redacted excerpt exceeded the contract's byte bound.
     #[error("excerpt has {bytes} bytes; maximum is {maximum}")]
+    #[diagnostic(code(evidra::agent_harness_event::excerpt_too_large))]
     ExcerptTooLarge {
         /// UTF-8 bytes supplied.
         bytes: usize,
@@ -896,6 +905,7 @@ pub enum AgentHarnessEventError {
 
     /// An event included more facets than the contract permits.
     #[error("event has {count} facets; maximum is {maximum}")]
+    #[diagnostic(code(evidra::agent_harness_event::too_many_facets))]
     TooManyFacets {
         /// Number of facets supplied.
         count: usize,

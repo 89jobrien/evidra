@@ -7,43 +7,54 @@
 
 use std::fmt;
 
+use miette::Diagnostic;
 use thiserror::Error;
 
 /// Source-safe failure reported by the filesystem inbox.
 ///
 /// Variants intentionally omit paths, filenames, and underlying operating-system errors so
 /// callers cannot accidentally disclose repository-local evidence in diagnostics.
-#[derive(Clone, Copy, PartialEq, Eq, Error)]
+#[derive(Clone, Copy, PartialEq, Eq, Error, Diagnostic)]
 pub enum AgentHarnessFileInboxError {
     /// Another ingestion process owns the advisory lock.
     #[error("agent harness ingestion is already running")]
+    #[diagnostic(code(evidra::agent_harness_file_inbox::already_running))]
     AlreadyRunning,
     /// Required atomic filesystem behavior is unsupported.
     #[error("agent harness inbox filesystem is unsupported")]
+    #[diagnostic(code(evidra::agent_harness_file_inbox::unsupported_filesystem))]
     UnsupportedFilesystem,
     /// Inbox directory creation or state lookup failed.
     #[error("failed to create agent harness inbox directories")]
+    #[diagnostic(code(evidra::agent_harness_file_inbox::create_directory))]
     CreateDirectory,
     /// Directory inventory or validation failed.
     #[error("failed to inspect agent harness inbox")]
+    #[diagnostic(code(evidra::agent_harness_file_inbox::inspect_directory))]
     InspectDirectory,
     /// An unsafe or unrecognized directory entry was found.
     #[error("agent harness inbox contains an unsafe entry")]
+    #[diagnostic(code(evidra::agent_harness_file_inbox::unsafe_entry))]
     UnsafeEntry,
     /// Atomic claim acquisition failed.
     #[error("failed to claim agent harness event")]
+    #[diagnostic(code(evidra::agent_harness_file_inbox::claim))]
     Claim,
     /// A claimed event could not be opened safely.
     #[error("failed to open claimed agent harness event")]
+    #[diagnostic(code(evidra::agent_harness_file_inbox::open_claim))]
     OpenClaim,
     /// A completed event could not be removed.
     #[error("failed to complete agent harness event")]
+    #[diagnostic(code(evidra::agent_harness_file_inbox::complete))]
     Complete,
     /// A rejected event could not be quarantined.
     #[error("failed to quarantine agent harness event")]
+    #[diagnostic(code(evidra::agent_harness_file_inbox::quarantine))]
     Quarantine,
     /// A fixed quarantine reason could not be written.
     #[error("failed to write agent harness quarantine reason")]
+    #[diagnostic(code(evidra::agent_harness_file_inbox::write_reason))]
     WriteReason,
 }
 

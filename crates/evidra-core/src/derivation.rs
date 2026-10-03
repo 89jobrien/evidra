@@ -13,6 +13,7 @@
 //! produce an identical record and determinism is testable rather than aspirational.
 
 use chrono::{DateTime, Utc};
+use miette::Diagnostic;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -1154,10 +1155,11 @@ impl FacetCount {
 }
 
 /// Failures raised while constructing derived records.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Error, Diagnostic)]
 pub enum DerivationError {
     /// A required field was empty or whitespace.
     #[error("{field} must not be blank")]
+    #[diagnostic(code(evidra::derivation::blank_field))]
     BlankField {
         /// The field that was blank.
         field: &'static str,
@@ -1165,30 +1167,37 @@ pub enum DerivationError {
 
     /// An identity string could not be parsed.
     #[error("identity is not a valid ULID")]
+    #[diagnostic(code(evidra::derivation::invalid_identity))]
     InvalidIdentity,
 
     /// The scope window ended before it began.
     #[error("scope window is inverted")]
+    #[diagnostic(code(evidra::derivation::inverted_window))]
     InvertedWindow,
 
     /// A derivation was recorded as replacing itself.
     #[error("a derivation cannot supersede itself")]
+    #[diagnostic(code(evidra::derivation::self_supersession))]
     SelfSupersession,
 
     /// Facet presence did not match the declared derivation kind.
     #[error("facet presence does not match the derivation kind")]
+    #[diagnostic(code(evidra::derivation::facet_kind_mismatch))]
     FacetKindMismatch,
 
     /// A relationship connected a record to itself.
     #[error("relationship endpoints must differ")]
+    #[diagnostic(code(evidra::derivation::self_relationship))]
     SelfRelationship,
 
     /// An assisted method recorded a confidence band it may not hold.
     #[error("assisted derivations may not exceed weak confidence")]
+    #[diagnostic(code(evidra::derivation::ungated_disposition))]
     UngatedDisposition,
 
     /// The record could not be serialized for hashing.
     #[error("failed to serialize the derived record")]
+    #[diagnostic(code(evidra::derivation::integrity_serialization))]
     IntegritySerialization,
 }
 

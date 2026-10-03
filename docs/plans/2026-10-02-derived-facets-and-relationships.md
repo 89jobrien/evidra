@@ -30,6 +30,8 @@ recurring failure patterns become queryable without re-parsing every payload.
   not depend on `evidra-store`
 - **Property tests**: `proptest` as a `[dev-dependencies]` workspace entry. This is the workspace's
   first property-testing dependency; it never enters a production dependency path
+- **Diagnostics**: `miette` with `default-features = false, features = ["derive"]`. `thiserror`
+  remains for the `Error` impl, which `miette` does not provide
 
 ## Tasks
 
@@ -136,6 +138,7 @@ Worth fixing before it becomes CI noise.
 
 ### Task 3: Deterministic engine
 
+**Status**: complete
 **Crate**: `evidra-engine`
 **File(s)**: `crates/evidra-engine/src/lib.rs`
 **Run**: `cargo nextest run -p evidra-engine`
@@ -144,6 +147,31 @@ Worth fixing before it becomes CI noise.
 2. Implement the band tables and facet projection. Enforce the registered-namespace check at
    registration time, and the redaction-inheritance check on every emitted value (ADR-010).
 3. Clippy clean, then commit.
+
+`thiserror` and `miette` coexist rather than replace each other. miette's `Diagnostic` derive does
+not implement `std::error::Error`, so removing `thiserror` would break `?` propagation into
+`Box<dyn Error>` and the CLI in Task 6. `thiserror` supplies `Error`; `miette` supplies the code,
+severity, help text, and rendering. Library crates take `miette` with `default-features = false,
+features = ["derive"]`, which keeps the `fancy` rendering stack out of every library; the CLI will
+opt into `fancy` when it starts rendering.
+
+All nine error types now carry a `Diagnostic` derive and a per-variant code, 73 in total, all
+namespaced `evidra::<type>::<variant>` and unique. Codes are a public contract the moment `--json`
+exposes them, so the engine asserts its own are namespaced and unique, and cross-crate uniqueness
+belongs in the Task 4 conformance suites.
+
+Two decisions in the redaction check worth naming, because both could have been made more
+permissively:
+
+- A band name must be a snake-case identifier. A band named `the token was present` is prose, and
+  prose is what gets scraped off an excerpt, so the table is refused at declaration. This makes the
+  cardinality bound a soundness property rather than only a storage saving.
+- The derivability test requires _every_ content word of the value to appear in one excerpt, where a
+  content word is four characters or longer. That refuses `remote-socket-waiting` derived from an
+  excerpt about a remote socket, which is the exposure ADR-010 is about. The cost is a real loss of
+  coverage: `oom_kill` is refused when the excerpt says `killed`, because a substring test would
+  have cleared it. ADR-010 accepts that loss explicitly, and `partially_overlapping_category_is_refused`
+  pins the behaviour so a future loosening is a deliberate change.
 
 ### Task 4: Conformance suites
 

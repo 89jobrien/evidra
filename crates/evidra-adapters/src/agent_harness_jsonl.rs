@@ -13,6 +13,7 @@ use evidra_core::{
     HarnessEventType, HarnessRef, HarnessSessionId, ObservationFacet, RedactedExcerpt,
     RedactionRecord, SourceEventId, SourceRef, SubjectRef,
 };
+use miette::Diagnostic;
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -21,10 +22,11 @@ const MAX_RECORD_BYTES: usize = 128 * 1024;
 const MAX_SKIPPED_BLANK_BYTES: usize = 128 * 1024;
 
 /// Error returned while decoding agent-harness JSONL evidence.
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Diagnostic)]
 pub enum AgentHarnessAdapterError {
     /// Source bytes could not be read.
     #[error("failed to read agent harness JSONL at line {line}")]
+    #[diagnostic(code(evidra::agent_harness_adapter::read))]
     Read {
         /// Physical line where reading failed.
         line: usize,
@@ -32,6 +34,7 @@ pub enum AgentHarnessAdapterError {
 
     /// A physical JSONL record exceeded the configured byte bound.
     #[error("agent harness JSONL record at line {line} exceeds {maximum} bytes")]
+    #[diagnostic(code(evidra::agent_harness_adapter::record_too_large))]
     RecordTooLarge {
         /// Physical line containing the oversized record.
         line: usize,
@@ -43,6 +46,7 @@ pub enum AgentHarnessAdapterError {
 
     /// Blank input consumed the complete per-call work allowance.
     #[error("agent harness blank input limit reached at line {line}")]
+    #[diagnostic(code(evidra::agent_harness_adapter::blank_input_limit))]
     BlankInputLimit {
         /// Next physical line that was not consumed.
         line: usize,
@@ -52,6 +56,7 @@ pub enum AgentHarnessAdapterError {
 
     /// A physical record was not valid v1 JSON.
     #[error("invalid agent harness JSON at line {line}")]
+    #[diagnostic(code(evidra::agent_harness_adapter::invalid_json))]
     InvalidJson {
         /// Physical line containing invalid JSON.
         line: usize,
@@ -59,6 +64,7 @@ pub enum AgentHarnessAdapterError {
 
     /// A record used an unsupported wire schema.
     #[error("unsupported agent harness schema at line {line}")]
+    #[diagnostic(code(evidra::agent_harness_adapter::unsupported_schema))]
     UnsupportedSchema {
         /// Physical line containing the unsupported schema.
         line: usize,
@@ -66,6 +72,7 @@ pub enum AgentHarnessAdapterError {
 
     /// A source or subject reference violated domain validation.
     #[error("invalid source or subject reference at line {line}")]
+    #[diagnostic(code(evidra::agent_harness_adapter::invalid_reference))]
     InvalidReference {
         /// Physical line containing the invalid reference.
         line: usize,
@@ -76,6 +83,7 @@ pub enum AgentHarnessAdapterError {
 
     /// A normalized event violated harness-domain validation.
     #[error("invalid agent harness event at line {line}")]
+    #[diagnostic(code(evidra::agent_harness_adapter::invalid_event))]
     InvalidEvent {
         /// Physical line containing the invalid event.
         line: usize,

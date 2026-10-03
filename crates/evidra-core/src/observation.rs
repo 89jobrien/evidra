@@ -4,6 +4,7 @@
 use std::fmt;
 
 use chrono::{DateTime, Utc};
+use miette::Diagnostic;
 use serde::de::Error as DeserializeError;
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
@@ -503,10 +504,11 @@ impl Observation {
 }
 
 /// Error returned when observation data cannot satisfy domain requirements.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Error, Diagnostic)]
 pub enum ObservationError {
     /// A required text field was blank.
     #[error("{field} must not be blank")]
+    #[diagnostic(code(evidra::observation::blank_field))]
     BlankField {
         /// Name of the invalid field.
         field: &'static str,
@@ -514,6 +516,7 @@ pub enum ObservationError {
 
     /// The integrity envelope could not be serialized.
     #[error("failed to serialize observation integrity envelope")]
+    #[diagnostic(code(evidra::observation::integrity_serialization))]
     IntegritySerialization,
 }
 
