@@ -19,11 +19,13 @@ property invariants; a slice is done when its gates pass and no earlier gate reg
 
 `docs/designs/2026-10-02-derived-facet-and-relationship-design.md`
 
-Fills the reserved `evidra-engine` boundary and advances `SCHEMA_VERSION` to 3.
-
 Banded facet projections over the ledger; append-only relationships carrying confidence and scope;
 supporting and refuting evidence links; supersession by chain (ADR-008); banded numeric facets
 (ADR-009); redaction inheritance (ADR-010); banded confidence (ADR-011).
+
+Landed across `f80a00e` and `adc99cf`: the domain in `evidra-core`, schema v3 in `evidra-store`, and
+band tables plus facet projection in `evidra-engine`. Not yet wired into `evidra-cli` — no crate
+depends on `evidra-engine`, so the slice is reachable only through the library API today.
 
 **Gate:** eleven conformance sections and twenty-one property invariants, all passing.
 

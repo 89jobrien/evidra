@@ -73,13 +73,13 @@ remain attributed claims. Do not grant inbox write access to untrusted producers
 
 ## Workspace
 
-| Crate             | Responsibility                                                        |
-| ----------------- | --------------------------------------------------------------------- |
-| `evidra-core`     | Domain types and ports                                                |
-| `evidra-engine`   | Reserved boundary for correlation, inference, validation, and scoring |
-| `evidra-store`    | SQLite persistence adapter                                            |
-| `evidra-adapters` | Bounded JSONL normalization and secure local inbox lifecycle          |
-| `evidra-cli`      | CLI composition root and rendering                                    |
+| Crate             | Responsibility                                               |
+| ----------------- | ------------------------------------------------------------ |
+| `evidra-core`     | Domain types and ports                                       |
+| `evidra-engine`   | Deterministic facet banding and redaction inheritance        |
+| `evidra-store`    | SQLite persistence adapter                                   |
+| `evidra-adapters` | Bounded JSONL normalization and secure local inbox lifecycle |
+| `evidra-cli`      | CLI composition root and rendering                           |
 
 ## Documentation
 
