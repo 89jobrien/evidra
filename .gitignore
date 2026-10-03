@@ -6,3 +6,4 @@
 .ctx/godmode/
 .ctx/_WORKING_DIR/
 /.taskit/
+/.health-baseline.json

@@ -27,6 +27,11 @@ evidra-engine  -> evidra-core
   observations. Git, Cargo, CI, and manual input adapters remain future work.
 - `evidra-cli`: composition root, command parsing, and rendering; no business rules.
 
+Longer-form documentation lives alongside this guide: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+for the crate layout and the constraints behind it, [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md)
+for the invariants each rule below protects, [`docs/OPERATIONS.md`](docs/OPERATIONS.md) for running
+the CLI, and [`docs/SCHEMA.md`](docs/SCHEMA.md) for storage internals.
+
 ## Commands
 
 The workspace MSRV is Rust 1.98. **Use `taskit` for workspace-level commands** — fmt, lint, compile,

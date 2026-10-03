@@ -48,7 +48,7 @@ Release entries are grouped by commit type and contain no decorative symbols.
 
 Repository-local state is stored in `.evidra/evidra.db` and is ignored by Git.
 
-The current database schema is v2. Re-run `evidra init` to migrate a v1 repository explicitly;
+The current database schema is v3. Re-run `evidra init` to migrate a v1 or v2 repository explicitly;
 ordinary commands do not migrate storage. Before migration, stop Evidra writers and create a
 WAL-safe SQLite backup rather than copying only the main database file. Migration is transactional,
 but there is no automatic downgrade for older binaries.
@@ -83,13 +83,17 @@ remain attributed claims. Do not grant inbox write access to untrusted producers
 
 ## Documentation
 
-| Document                             | Contents                                                      |
-| ------------------------------------ | ------------------------------------------------------------- |
-| [`docs/PRD.md`](docs/PRD.md)         | Problem, users, requirements, quality bar, non-goals          |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Slice sequence and per-slice gates                            |
-| [`docs/adr/`](docs/adr/)             | Architecture decision records                                 |
-| [`docs/designs/`](docs/designs/)     | Slice and feature designs                                     |
-| [`policies/`](policies/)             | Git-tracked assumptions, invariants, controls, accepted risks |
+| Document                                       | Contents                                                      |
+| ---------------------------------------------- | ------------------------------------------------------------- |
+| [`docs/PRD.md`](docs/PRD.md)                   | Problem, users, requirements, quality bar, non-goals          |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md)           | Slice sequence and per-slice gates                            |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Crate layout and the constraints that shape it                |
+| [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md)   | Invariants every contributor must preserve                    |
+| [`docs/OPERATIONS.md`](docs/OPERATIONS.md)     | Running the CLI, inbox lifecycle, quarantine                  |
+| [`docs/SCHEMA.md`](docs/SCHEMA.md)             | Tables, triggers, migrations, validation                      |
+| [`docs/adr/`](docs/adr/)                       | Architecture decision records                                 |
+| [`docs/designs/`](docs/designs/)               | Slice and feature designs                                     |
+| [`policies/`](policies/)                       | Git-tracked assumptions, invariants, controls, accepted risks |
 
 Decisions are recorded as ADRs numbered `001`–`011`. Each states its context, the decision, and the
 consequences accepted; none is edited after acceptance, and a change of mind is a new record.
