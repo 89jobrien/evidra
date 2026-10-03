@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   test:
     strategy:
@@ -15,14 +18,23 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: rustfmt, clippy
-      - uses: taiki-e/install-action@nextest
-      - name: Format
-        if: matrix.os == 'ubuntu-latest'
-        run: cargo fmt --all -- --check
-      - run: cargo check --workspace --all-targets
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo nextest run --workspace
+      - uses: Swatinem/rust-cache@v2
+      - name: Install taskit required tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-llvm-cov,cargo-deny,cargo-machete
+      # Built with stable, not the project's pinned 1.98: taskit declares no
+      # rust-version, so it may use APIs newer than this workspace's MSRV. It
+      # still shells out to the project toolchain when it runs cargo.
+      # Version is pinned to the one validated locally; bump both together.
+      - name: Install taskit
+        run: cargo +stable install --locked --version 0.8.0 taskit
+      - name: Run CI gate
+        run: taskit check ci
 
+  # taskit is not run on Windows: the inbox adapter is built on rustix unix APIs
+  # and only has a compile-time stub there. This job proves the rest of the
+  # workspace still compiles on an unsupported platform.
   unsupported-platform:
     runs-on: windows-latest
     steps:

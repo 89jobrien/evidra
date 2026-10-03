@@ -10,7 +10,6 @@ readme = "../../README.md"
 publish = false
 
 [dependencies]
-chrono.workspace = true
 evidra-core.workspace = true
 miette.workspace = true
 thiserror.workspace = true

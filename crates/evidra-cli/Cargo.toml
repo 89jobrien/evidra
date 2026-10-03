@@ -20,7 +20,6 @@ clap.workspace = true
 evidra-adapters.workspace = true
 evidra-core.workspace = true
 evidra-store.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

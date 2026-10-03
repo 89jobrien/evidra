@@ -5,3 +5,4 @@
 *.db-journal
 .ctx/godmode/
 .ctx/_WORKING_DIR/
+/.taskit/

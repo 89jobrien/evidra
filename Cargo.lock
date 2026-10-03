@@ -299,7 +299,6 @@ dependencies = [
  "evidra-store",
  "predicates",
  "rusqlite",
- "serde",
  "serde_json",
  "tempfile",
  "ulid",
@@ -323,7 +322,6 @@ dependencies = [
 name = "evidra-engine"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "evidra-core",
  "miette",
  "proptest",
