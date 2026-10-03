@@ -232,8 +232,21 @@ pub struct AgentHarnessJsonlSource<R> {
     records: BoundedJsonlReader<R>,
 }
 
+impl<R> std::fmt::Debug for AgentHarnessJsonlSource<R> {
+    /// Formats this value without exposing sensitive evidence.
+    ///
+    /// Deliberately unconstrained on `R` so a source stays debuggable over any reader, including
+    /// ones that are not themselves `Debug`.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AgentHarnessJsonlSource")
+            .finish_non_exhaustive()
+    }
+}
+
 impl<R: BufRead> AgentHarnessJsonlSource<R> {
     /// Creates a source over a buffered JSONL reader.
+    #[must_use]
     pub fn new(reader: R) -> Self {
         Self {
             records: BoundedJsonlReader::new(reader),
