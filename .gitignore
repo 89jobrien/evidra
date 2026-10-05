@@ -4,6 +4,7 @@
 *.db-wal
 *.db-journal
 .ctx/godmode/
+.ctx/memory-bank/
 .ctx/_WORKING_DIR/
 /.taskit/
 /.health-baseline.json
