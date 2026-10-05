@@ -20,6 +20,18 @@ assert_cmd = "2"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 miette = { version = "7", default-features = false, features = ["derive"] }
+# TEMPORARY: `obfsck` is a path-only dependency while the engine's own release versioning is being
+# sorted out. Path-only deliberately omits a version requirement so Cargo does not police a version
+# we are not pinning yet. REPLACE with `obfsck = "0.2.0"` before any release: the producer's Stage 2
+# depends on path-policy behaviour that differs between obfsck versions.
+#
+# `default-features = false` is load-bearing, not cosmetic. obfsck declares `default = ["analyzer"]`,
+# and `analyzer` pulls axum, reqwest, tokio, clap, genai/simplify_baml, tower-http, sha2,
+# shellexpand, serde_yaml, and tracing-subscriber. Evidra uses exactly three of obfsck's re-exported
+# items (`Obfuscator`, `ObfuscationMapExport`, `ObfuscationLevel`) and none of them need the
+# analyzer. Accepting the default added ~240 transitive packages — including an HTTP server and an
+# LLM SDK — to a dependency that lives in the redaction path.
+obfsck = { path = "../obfsck", default-features = false }
 predicates = "3"
 proptest = "1"
 rusqlite = { version = "0.37", features = ["bundled"] }

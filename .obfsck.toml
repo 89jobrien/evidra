@@ -1,0 +1,19 @@
+# Secret-scanner configuration for this repository.
+#
+# Exact allowlist entries are matched as substrings against each added line of
+# the diff, before any pattern is evaluated. Glob entries must match the entire
+# line and are therefore brittle for source code; prefer exact entries.
+
+[allowlist]
+patterns = [
+  # AWS's own documented example key from the IAM user guide. It is a fixture,
+  # not a credential, and can never be one: the literal is fixed and published.
+  #
+  # It appears in crates/evidra-adapters/src/obfsck_policy.rs in
+  # `secret_detection_is_recorded_without_naming_a_pattern`, which asserts that
+  # the policy records an `obfuscate:secret` transformation without echoing the
+  # matched pattern back into the value. Suppressing the fixture is what lets
+  # that assertion exist; suppressing any broader shape would let a real AWS key
+  # through, so this entry names the exact published literal and nothing else.
+  "AKIAIOSFODNN7EXAMPLE",
+]

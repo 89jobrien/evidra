@@ -843,22 +843,6 @@ fn validated_identity(
     Ok(value)
 }
 
-macro_rules! impl_redacted_debug {
-    ($($type:ty),+ $(,)?) => {
-        $(
-            /// Redacts all fields from diagnostic output for this evidence-bearing type.
-            impl fmt::Debug for $type {
-                /// Emits only the type name and a non-exhaustive marker, never retained values.
-                fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                    formatter
-                        .debug_struct(stringify!($type))
-                        .finish_non_exhaustive()
-                }
-            }
-        )+
-    };
-}
-
 impl_redacted_debug!(
     SourceEventId,
     HarnessRef,

@@ -28,11 +28,16 @@
 //! # }
 //! ```
 
+#[macro_use]
+mod macros;
+
 mod derivation;
 mod harness;
 mod ingest;
 mod observation;
 mod ports;
+mod producer;
+mod transformation;
 
 pub use derivation::{
     ConfidenceBand, Contradiction, CurrentFacet, Derivation, DerivationDraft, DerivationError,
@@ -58,3 +63,5 @@ pub use ports::{
     AgentHarnessAppendOutcome, AgentHarnessEventSource, DerivationStore, ObservationStore,
     RelationshipStore,
 };
+pub use producer::{ProducerError, RedactionPolicy, Reduction};
+pub use transformation::{DROP, OBFUSCATE, is_well_formed};

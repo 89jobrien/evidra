@@ -10,7 +10,14 @@
 //! observations; persistence remains behind the ports defined by `evidra-core`.
 
 mod agent_harness_jsonl;
+mod claude_code;
 mod inbox;
+mod obfsck_policy;
 
 pub use agent_harness_jsonl::{AgentHarnessAdapterError, AgentHarnessJsonlSource};
+pub use claude_code::{
+    Candidate, ClaudeCodeError, MAX_CANDIDATE_BYTES, Minimized, matches_sensitive_list_agrees,
+    minimize, names_sensitive_location, withheld,
+};
 pub use inbox::{AgentHarnessFileInbox, AgentHarnessFileInboxError, ClaimedHarnessFile};
+pub use obfsck_policy::{ObfsckPolicy, ObfsckPolicyError, POLICY_NAME};
