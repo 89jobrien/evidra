@@ -59,6 +59,10 @@ impl fmt::Display for QuarantineReason {
 }
 
 /// Content obtained from one claimed inbox item.
+//
+// TODO(HIGH): the `Event` variant wraps a `Box<AgentHarnessEvent>`, so this carries evidence and
+// AGENTS.md requires a redacted Debug. It prints only field types today because the inner event's
+// own `Debug` is redacted, but that safety is incidental rather than declared.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClaimedHarnessContent {
     /// One validated harness event.

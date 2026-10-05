@@ -173,8 +173,13 @@ permissively:
   have cleared it. ADR-010 accepts that loss explicitly, and `partially_overlapping_category_is_refused`
   pins the behaviour so a future loosening is a deliberate change.
 
+  The check runs on every emitted value, as ADR-010 requires. What does not exist is the property test
+  the ADR names for it — `no_facet_value_appears_in_source_excerpt` — so the four fixed cases above
+  are the whole of the coverage. See A-18 in [`../AUDIT.md`](../AUDIT.md).
+
 ### Task 4: Conformance suites
 
+**Status**: not started
 **Crate**: `godmode` convention, applied per crate
 **File(s)**: `crates/evidra-core/tests/conformance_derivation_domain.rs`,
 `crates/evidra-store/tests/conformance_derivation_store.rs`,
@@ -194,10 +199,21 @@ permissively:
 
 ### Task 5: Property suites
 
+**Status**: partial — nine of the stated invariants exist
 **Crate**: all three
 **File(s)**: `property_uncertainty_profile.rs`, `property_supersedes_chain.rs`,
 `property_store_invariants.rs`, `property_banding.rs`, `property_determinism.rs`
 **Run**: `cargo nextest run --workspace`
+
+None of the five named files exists. What does exist is nine `proptest` cases inline in two source
+files — five in `evidra-core`'s `derivation::tests::props` (written in Task 1) and four in
+`evidra-engine`'s `tests::props`. Naming the invariants and putting them in suite files is still the
+better shape; the gap is the count, not the approach.
+
+**One invariant named elsewhere does not exist at all.**
+`no_facet_value_appears_in_source_excerpt` is cited by ADR-010, by Task 3's record below, and by two
+design documents as the property checking the redaction guarantee. It is not written. See A-18 in
+[`../AUDIT.md`](../AUDIT.md).
 
 1. `proptest` is already a workspace dependency and a dev-dependency of `evidra-core`, added in Task
    1. The derived-domain properties are already written in `derivation::tests::props`; do not
@@ -210,9 +226,21 @@ permissively:
 
 ### Task 6: CLI composition
 
+**Status**: blocked — see below
 **Crate**: `evidra-cli`
 **File(s)**: `crates/evidra-cli/src/main.rs`, `crates/evidra-cli/tests/cli.rs`
 **Run**: `cargo nextest run -p evidra-cli`
+
+Blocked on a port slice that is not in this plan. `DerivationStore` and `RelationshipStore` have no
+implementor, and `ObservationStore` has neither `get` nor `select`, so `derive` cannot select its
+evidence set and `explain` cannot fetch the record it is asked to explain. The surface is specified in
+[`../designs/2026-10-03-derived-cli-surface-design.md`](../designs/2026-10-03-derived-cli-surface-design.md),
+which also records why writing the argument and exit-code tables first would have produced a document
+that reads complete and implements nothing.
+
+That specification's Step 1 — `get` on both stores, `select` on `ObservationStore`, sqlite
+implementations, and seven conformance clauses — belongs in this plan as Task 7, in `evidra-core` and
+`evidra-store`. It is domain work, not CLI work, and Task 6 cannot begin before it.
 
 1. Write failing tests for `derive`, `facet`, `relate`, and `explain`, including exit codes and the
    `--json` schema.
@@ -222,14 +250,23 @@ permissively:
 ## Sequencing
 
 Tasks 1 and 2 are independent and can proceed in either order. Task 3 depends on Task 1 for the
-domain types. Task 4 depends on Tasks 1 and 2. Task 5 depends on Tasks 1 through 3. Task 6 depends on
-all of them.
+domain types. Task 4 depends on Tasks 1 and 2. Task 5 depends on Tasks 1 through 3.
+
+Task 7 (the port slice specified in
+[`../designs/2026-10-03-derived-cli-surface-design.md`](../designs/2026-10-03-derived-cli-surface-design.md))
+depends on Tasks 1 and 2, and Task 6 depends on Task 7. Task 6 therefore cannot be the last task that
+names no predecessor — as originally drawn it listed no dependency that would have surfaced the gap.
 
 ## Done when
 
 Eleven conformance sections and twenty-one property invariants pass, `cargo clippy --workspace
 --all-targets -- -D warnings` is clean, and `validate_v3` asserts the append-only guarantee on every
 derived table.
+
+**Not met.** `validate_v3` does assert the append-only guarantee on every derived table, and clippy
+is clean. The other two conditions are not satisfied: zero conformance sections exist against eleven
+required, and nine property invariants exist against twenty-one. This condition was previously
+reported as met; see A-17 in [`../AUDIT.md`](../AUDIT.md) for what was actually counted.
 
 ## Not in this plan
 

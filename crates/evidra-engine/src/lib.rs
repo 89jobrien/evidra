@@ -170,6 +170,12 @@ impl BandTable {
             }
         }
 
+        for pair in bands.windows(2) {
+            if pair[1].lower() <= pair[0].lower() {
+                return Err(EngineError::UnorderedBands);
+            }
+        }
+
         if bands[0].lower() != i64::MIN {
             return Err(EngineError::IncompleteCoverage {
                 reason: "the lowest band must extend without a lower bound",
@@ -273,6 +279,11 @@ fn is_snake_case_identifier(value: &str) -> bool {
 ///
 /// Deliberately a borrowed view rather than an owned collection: the engine reads excerpts to decide
 /// what it may not emit, and it never needs to retain them.
+//
+// TODO(HIGH): this holds excerpts and redaction attestations, so AGENTS.md requires a redacted
+// Debug. Nothing leaks today only because both inner types redact themselves — an incidental
+// property that breaks the moment a third field is added. Use `impl_redacted_debug!` from
+// `evidra_core::harness` instead of `derive`.
 #[derive(Debug, Clone, Copy)]
 pub struct Evidence<'a> {
     excerpts: &'a [RedactedExcerpt],
@@ -321,6 +332,13 @@ impl<'a> Evidence<'a> {
             transformations.sort();
             // Rebuilding through the validating constructor keeps the inherited record subject to
             // the same rules as one a producer submitted.
+            //
+            // TODO(CRITICAL): this is the only `expect` in production code in the workspace, and it
+            // sits on the ADR-010 redaction-inheritance path — the decision that stops a derived
+            // record from weakening any redaction its evidence carries. A failed invariant aborts
+            // the process instead of surfacing a diagnosable error. The fallibility belongs in the
+            // signature: this should return `Result<Option<RedactionRecord>, EngineError>` and
+            // propagate, so callers must decide what a broken redaction union means.
             RedactionRecord::new(policy.policy(), policy.version(), transformations)
                 .expect("an attested redaction union stays valid")
         })
@@ -721,6 +739,12 @@ mod tests {
     }
 
     /// Confirms every integer in a dense range lands in exactly one declared band.
+    //
+    // TODO(LOW): duplicates the proptest of the same property in `tests::props` below
+    // (`band_is_total`, `banding_is_monotonic`). The proptest versions are the stronger check; these
+    // two fixed-range examples only pin the specific `duration_table` fixture's expected counts.
+    // Consider keeping just the fixture-specific assertions and letting the proptests own the
+    // general properties.
     #[test]
     fn band_is_total_over_a_dense_range() {
         let table = duration_table();
@@ -756,6 +780,9 @@ mod tests {
     }
 
     /// Confirms a lower raw value never lands in a higher band than a greater one.
+    //
+    // TODO(LOW): duplicated by the identically-named proptest in `tests::props`. See the note on
+    // `band_is_total_over_a_dense_range`.
     #[test]
     fn banding_is_monotonic() {
         let table = duration_table();
@@ -834,6 +861,41 @@ mod tests {
             bounded_top,
             Err(EngineError::IncompleteCoverage { .. })
         ));
+    }
+
+    /// Confirms descending band lower bounds are refused as unordered rather than as a coverage
+    /// defect.
+    ///
+    /// Regression: `BandTable::new` documented `UnorderedBands` but never checked ordering, so a
+    /// descending table surfaced as `IncompleteCoverage` and the diagnostic code existed only as a
+    /// claim. Ordering is checked first so a mis-ordered table reports its actual cause.
+    #[test]
+    fn descending_bands_are_refused_as_unordered() {
+        let descending = BandTable::new(
+            "x",
+            "y",
+            "v",
+            FacetKind::Classification,
+            vec![
+                Band::new("a", i64::MIN, Some(10)),
+                Band::new("b", 10, Some(20)),
+                Band::new("c", 5, None),
+            ],
+        );
+        assert!(matches!(descending, Err(EngineError::UnorderedBands)));
+
+        let repeated_lower = BandTable::new(
+            "x",
+            "y",
+            "v",
+            FacetKind::Classification,
+            vec![
+                Band::new("a", i64::MIN, Some(10)),
+                Band::new("b", 10, None),
+                Band::new("c", 10, None),
+            ],
+        );
+        assert!(matches!(repeated_lower, Err(EngineError::UnorderedBands)));
     }
 
     /// Confirms a band name must be a declared identifier rather than prose.

@@ -321,6 +321,11 @@ impl DerivationMethod {
     }
 
     /// Returns the stable persisted spelling of the method kind.
+    //
+    // TODO(MEDIUM): zero call sites anywhere in the workspace — not even tests. It exists for the
+    // `DerivationStore` implementation that does not exist yet (see `ports.rs`), which currently
+    // carries the same values as SQL literals (`kind IN ('facet','aggregate','cluster')`). Confirm
+    // whether a future adapter should call this or keep using literals before adding a caller.
     #[must_use]
     pub fn kind_str(&self) -> &'static str {
         match self {
@@ -443,6 +448,9 @@ impl DerivationScope {
     }
 
     /// Returns the filters that selected the evidence.
+    //
+    // TODO(MEDIUM): zero call sites anywhere in the workspace — not even tests. A store adapter
+    // would need it to turn a scope back into a query.
     #[must_use]
     pub fn selection(&self) -> &[FacetFilter] {
         &self.selection
@@ -642,6 +650,10 @@ pub enum EvidenceTarget {
 
 impl EvidenceTarget {
     /// Returns the stable persisted spelling of the target kind.
+    //
+    // TODO(MEDIUM): zero call sites anywhere in the workspace — not even tests. Same status as
+    // `DerivationMethod::kind_str` above: it awaits a `DerivationStore`/`RelationshipStore`
+    // implementation that does not exist.
     #[must_use]
     pub fn kind_str(&self) -> &'static str {
         match self {
@@ -890,6 +902,13 @@ impl Derivation {
     /// # Errors
     ///
     /// Returns [`DerivationError::IntegritySerialization`] when the record cannot be serialized.
+    //
+    // TODO(HIGH): never called from production code — only from tests and the example. The
+    // `derivations` table has no digest column and `evidra-store` never verifies this hash on read,
+    // whereas observations *are* digest-verified on every load via `Observation::verify_integrity`.
+    // Derived rows therefore carry no tamper detection at all, which is a soundness gap rather than
+    // dead code. Either add a digest column verified on read, or remove the method so it does not
+    // imply a guarantee the store does not provide.
     pub fn content_hash(&self) -> Result<[u8; 32], DerivationError> {
         let bytes =
             serde_json::to_vec(self).map_err(|_| DerivationError::IntegritySerialization)?;
@@ -1031,8 +1050,7 @@ impl Relationship {
 }
 
 /// A facet value as it appears in a resolved current view.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CurrentFacet {
     derivation: DerivationId,
     namespace: String,
@@ -1040,6 +1058,36 @@ pub struct CurrentFacet {
     value: FacetValue,
     profile: UncertaintyProfile,
     current: bool,
+}
+
+/// The wire shape a current facet is deserialized from, before its invariants are re-checked.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawCurrentFacet {
+    derivation: DerivationId,
+    namespace: String,
+    name: String,
+    value: FacetValue,
+    profile: UncertaintyProfile,
+    current: bool,
+}
+
+impl<'de> Deserialize<'de> for CurrentFacet {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawCurrentFacet::deserialize(deserializer)?;
+        Self::new(
+            raw.derivation,
+            raw.namespace,
+            raw.name,
+            raw.value,
+            raw.profile,
+            raw.current,
+        )
+        .map_err(serde::de::Error::custom)
+    }
 }
 
 impl CurrentFacet {
@@ -1729,6 +1777,43 @@ mod tests {
             serde_json::from_str::<Relationship>(raw).is_err(),
             "a self-referential relationship must not survive deserialization"
         );
+    }
+
+    /// Confirms deserialization cannot smuggle in a blank facet namespace or name.
+    ///
+    /// Regression: `CurrentFacet` derived `Deserialize`, so a stored `derivation_facets` document
+    /// could carry `"namespace": ""` into a value `CurrentFacet::new` refuses. A derived view built
+    /// from the store is only as trustworthy as the record it read.
+    #[test]
+    fn deserialization_cannot_smuggle_blank_current_facet() {
+        let template = |namespace: &str, name: &str| {
+            format!(
+                r#"{{
+                  "derivation": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                  "namespace": {namespace},
+                  "name": {name},
+                  "value": "verified-fail",
+                  "profile": {{
+                    "confidence": "strong",
+                    "freshness": "current",
+                    "contradiction": "uncontested",
+                    "scope": "exact"
+                  }},
+                  "current": true
+                }}"#
+            )
+        };
+
+        for raw in [
+            template(r#""""#, r#""outcome""#),
+            template(r#""friction""#, r#""""#),
+            template(r#""  ""#, r#""outcome""#),
+        ] {
+            assert!(
+                serde_json::from_str::<CurrentFacet>(&raw).is_err(),
+                "a current-facet row with a blank namespace or name must not survive deserialization"
+            );
+        }
     }
 
     /// Property coverage for the derived-domain invariants.

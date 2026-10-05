@@ -27,7 +27,25 @@ Landed across `f80a00e` and `adc99cf`: the domain in `evidra-core`, schema v3 in
 band tables plus facet projection in `evidra-engine`. Not yet wired into `evidra-cli` — no crate
 depends on `evidra-engine`, so the slice is reachable only through the library API today.
 
-**Gate:** eleven conformance sections and twenty-one property invariants, all passing.
+**Gate: not met.** The plan's stated gate was eleven conformance sections and twenty-one property
+invariants. Neither exists in that quantity:
+
+- **Conformance: 0 of 11.** There is no `docs/conformance.md` and no `tests/conformance_*.rs` in any
+  crate. Tasks 4 and 5 of `docs/plans/2026-10-02-derived-facets-and-relationships.md` are unwritten
+  and carry no Status line.
+- **Properties: 9 of 21.** Five `proptest` cases in `evidra-core`, four in `evidra-engine`. Real
+  coverage of the read path and of banding, but well short of the count the gate claimed.
+
+The count was reported as met without the suites being written. Audit findings A-17 and A-18 in
+[`AUDIT.md`](AUDIT.md) carry the detail; the second is the one that matters most, because
+`no_facet_value_appears_in_source_excerpt` — named by ADR-010 and three other documents as the
+property checking the redaction guarantee — does not exist.
+
+**What actually blocks the slice.** `DerivationStore` and `RelationshipStore` have no implementor and
+no consumer, and `ObservationStore` has no `get` or `select`. Schema v3's four derived tables are
+populated only by raw-SQL helpers inside a test module. The remaining work is specified in
+[`designs/2026-10-03-derived-cli-surface-design.md`](designs/2026-10-03-derived-cli-surface-design.md),
+whose Step 1 is that port slice; Task 6 of the plan cannot begin before it.
 
 ## Slice 2 — Decision capture
 
@@ -85,9 +103,30 @@ unchanged (ADR-003).
 | Derived-record retention                 | Superseded revisions accumulate without bound; no policy yet                                     |
 | Protocol-drift gate on the port surface  | `evidra-core/src/ports.rs` is the workspace's highest-value drift surface and has no taskit lock |
 
+## Audit findings
+
+Open findings from the workspace audit are indexed in [`AUDIT.md`](AUDIT.md). Four are load-bearing
+for planning rather than for a particular slice:
+
+- **The port slice (A-04 to A-07).** No implementor for either derived store, and no way to read a
+  record or execute a scope. Specified in
+  [`designs/2026-10-03-derived-cli-surface-design.md`](designs/2026-10-03-derived-cli-surface-design.md).
+- **ADR-010's property (A-18).** The redaction guarantee is enforced in code and exercised by fixed
+  cases, but the property four documents cite as its check does not exist.
+- **Derived-record tamper detection (A-09).** `derivations` has no digest column, so the read-path
+  probe cannot detect a swapped document. This bears on ADR-003 and on Slice 5's byte-identical
+  gate.
+- **Three unenforced lints (A-11).** `unwrap_used`, `expect_used`, and `missing_docs` are all clean
+  and all disabled. The one production `expect` in the workspace exists because of this.
+
 ## Sequencing note
 
 Slice 3 is the one most likely to change shape. Published accuracy for step-level attribution is near
 47% at best, and lower outside synthetic benchmarks. Slices 4 and 5 both assume attribution output is
 worth consuming; if it is not, Slice 4 still stands on the derived layer alone, and Slice 5 does not
 depend on attribution at all. Neither is blocked by Slice 3 landing badly.
+
+One dependency the earlier version of this note omitted: **Slice 2 cannot begin before the port slice
+lands.** Decision capture adds a derived kind, and `DerivationKind::Cluster` already shows what
+happens when a kind is added ahead of its store — the domain type exists, nothing can persist it, and
+nothing notices. That is precisely the state Slice 1 is in now.

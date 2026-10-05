@@ -40,6 +40,12 @@ pub trait AgentHarnessEventSource {
 pub trait ObservationStore {
     /// Adapter-specific error returned by persistence operations.
     type Error: Error + Send + Sync + 'static;
+    //
+    // TODO(CRITICAL): this trait has no `get(&ObservationId)` and no `select(...)`, which blocks
+    // every CLI command that needs to read one record or filter the ledger. `list(limit)` is the
+    // only read path. If `select` is added, its filter predicate must match the one
+    // `DerivationStore::current_facets` uses, or windowed queries will silently disagree about
+    // which derivations are current.
 
     /// Appends an observation without replacing any existing record.
     ///
@@ -70,6 +76,12 @@ pub trait ObservationStore {
 ///
 /// Implementations append only. A revision is a new derivation plus a
 /// [`RelationKind::Supersedes`] relationship, never a mutation of a stored row (ADR-008).
+//
+// TODO(CRITICAL): this trait has no implementor and no consumer anywhere in the workspace. Schema
+// v3 already carries `derivations`, `derivation_facets`, and `derivation_evidence`, but only
+// raw-SQL helpers inside `evidra-store`'s test module ever populate them. The derived layer — the
+// entire reason schema v3 exists — is therefore persisted yet unreachable through its own declared
+// interface. Add the `evidra-store` implementation or record explicitly that this is ports-first.
 pub trait DerivationStore {
     /// Adapter-specific error returned by persistence operations.
     type Error: Error + Send + Sync + 'static;
@@ -87,6 +99,10 @@ pub trait DerivationStore {
     ///
     /// This is a read-through view. Superseded rows remain stored and remain individually
     /// retrievable; this method decides which ones count as current.
+    ///
+    /// TODO(HIGH): "remain individually retrievable" is not true of this trait — there is no
+    /// `get(&DerivationId)`, so a caller holding an id cannot retrieve a single derivation at all.
+    /// `current_facets` and `aggregate` are the only read paths, and both are collection-shaped.
     ///
     /// # Errors
     ///
@@ -107,6 +123,11 @@ pub trait DerivationStore {
 }
 
 /// Persistence for the typed edges connecting records.
+//
+// TODO(CRITICAL): no implementor and no consumer anywhere in the workspace. The `relationships`
+// table exists in schema v3 and is populated only by a raw-SQL helper in `evidra-store`'s test
+// module. Note that `derive`/`relate`/`explain` CLI work is blocked on this port as well as on
+// `DerivationStore`.
 pub trait RelationshipStore {
     /// Adapter-specific error returned by persistence operations.
     type Error: Error + Send + Sync + 'static;

@@ -1,9 +1,14 @@
 # Conventions
 
 The invariants every contributor must preserve, and why each exists. `AGENTS.md` states the rules
-tersely for agents; this document explains them. Each convention below is enforced _somewhere_ —
-in a macro, a trigger, a lint, or a test — because a convention enforced only by review is a
-convention that will be broken.
+tersely for agents; this document explains them. Most conventions below are enforced _somewhere_ — in
+a macro, a trigger, a lint, or a test — because a convention enforced only by review is a convention
+that will be broken.
+
+Three are not, and they are marked **No lint** in the
+[enforcement summary](#enforcement-summary). An audit against this document
+([`AUDIT.md`](AUDIT.md)) found two of them violated in the workspace, which is the argument for
+treating that row group as unfinished work rather than as a settled convention.
 
 ## 1. Redacted `Debug` on anything evidence-bearing
 
@@ -47,7 +52,19 @@ else, so adding a field later cannot silently start leaking it.
 
 **Enforced by.** Two property tests, `debug_never_contains_payload` and `debug_never_contains_source`,
 plus per-type tests such as `observation_debug_omits_payload_and_provenance`,
-`source_and_subject_debug_redacts_values`, and `harness_debug_redacts_source_values`.
+`source_and_subject_debug_redacts_values`, `harness_debug_redacts_source_values`, and
+`provenance_debug_redacts_collector_and_transformations`.
+
+**Known gaps.** Two types derive `Debug` while holding evidence, and redact only because their inner
+fields happen to: `ClaimedHarnessContent` and `evidra_engine::Evidence<'a>`. Neither leaks today;
+both break the moment a third field is added, because nothing about them declares the requirement.
+See A-10 in [`AUDIT.md`](AUDIT.md).
+
+**A caution this convention has already earned.** A redacting parent hides a leaking child. Both
+`Observation` and `ObservationDraft` redact every field, so `Provenance` derived `Debug` for the
+lifetime of the workspace with no visible symptom: every test that touched provenance went through
+an envelope that printed nothing. A per-type assertion is the only thing that catches this, which is
+why the list above is per-type rather than per-envelope.
 
 ## 2. Persisted types re-run their invariants on read
 
@@ -91,8 +108,22 @@ With it, adding a field to a persisted type _requires_ a migration.
 
 **Enforced by.** Property tests `roundtrip_preserves_record` and `relationship_roundtrip_preserves_record`;
 negative tests `deserialization_cannot_smuggle_self_relationship`,
-`deserialization_cannot_smuggle_self_supersession`, `deserialization_cannot_smuggle_ungated_confidence`;
-and store-level tests `derived_unreadable_document_is_rejected`, `derived_facet_drift_is_rejected`.
+`deserialization_cannot_smuggle_self_supersession`, `deserialization_cannot_smuggle_ungated_confidence`,
+`deserialization_cannot_smuggle_blank_current_facet`; and store-level tests
+`derived_unreadable_document_is_rejected`, `derived_facet_drift_is_rejected`.
+
+**The two legitimate exemptions.** `FacetCount` derives `Deserialize`, because its constructor is
+infallible and there is no invariant to re-run. `FacetValue` derives it under `#[serde(untagged)]`,
+which structurally cannot honour `deny_unknown_fields`; harmless while every variant is a scalar, and
+a future non-scalar variant would end the exemption. Neither exemption extends to a type with a
+fallible constructor — `CurrentFacet` had one, derived `Deserialize`, and was the workspace's only
+instance of this violation. See A-02 and A-15 in [`AUDIT.md`](AUDIT.md).
+
+**One limit worth stating.** Re-running construction invariants proves the record is one the domain
+_would_ have accepted. It does not prove it is the record that was written. An append-only table
+means a swapped document is indistinguishable from a forged one, and no amount of read-path
+validation closes that on its own — `derivations` currently has no digest column, so
+`Derivation::content_hash` is computed and never verified. See A-09.
 
 ## 3. Never read the clock in a persisted-record constructor
 
@@ -144,7 +175,7 @@ on-disk state.
 - **SQLite triggers** abort every `UPDATE` and `DELETE` on all six tables. See
   [`SCHEMA.md`](SCHEMA.md#append-only-enforcement).
 - **Constructors** validate what would be an illegal transition — `Relationship::new` refuses a
-  self-edge; `CurrentFacet::new` refuses a self-supersession; only deterministic methods may dispose.
+  self-edge, `Derivation::new` refuses a self-supersession, only deterministic methods may dispose.
 - **Read-path validation** cross-checks indexed columns against their documents, so drift is an
   error rather than a wrong answer.
 
@@ -159,18 +190,28 @@ compiler, because `#[must_use]` has no lint. Add it by hand.
 ## 7. No `unwrap`, `expect`, or `panic` outside tests
 
 `unsafe_code` is `forbid` workspace-wide, and `todo`, `unimplemented`, and `dbg_macro` are `deny`.
-Production code currently has **zero** `unwrap`, `expect`, `panic!`, `todo!`, `unimplemented!`, and
-zero `unsafe`. The several hundred `.expect(...)` calls are all inside `#[cfg(test)]`.
+Production code currently has **zero** `unwrap`, **one** `expect`, **zero** `panic!`, `todo!`, and
+`unimplemented!`, and zero `unsafe`. The several hundred other `.expect(...)` calls are all inside
+`#[cfg(test)]`.
+
+The one is `Evidence::inherit_redaction` in `evidra-engine`, rebuilding the union of a derived
+record's redaction attestations. It is on the ADR-010 path — the check that stops a derived record
+weakening any redaction its evidence carries — so a failed invariant there aborts the process instead
+of surfacing a diagnosable error. The fallibility belongs in the signature. See A-08 in
+[`AUDIT.md`](AUDIT.md).
 
 This is a convention _without_ a lint, which is exactly why it needs restating. `clippy::unwrap_used`
 and `clippy::expect_used` both pass clean today and can be turned on — but they need
-`#![cfg_attr(not(test), deny(...))]` so the test modules keep their assertions.
+`#![cfg_attr(not(test), deny(...))]` so the test modules keep their assertions. That single missing
+lint is why the `expect` above survived a clean `-D warnings` run: `AGENTS.md` forbids five
+constructs and the workspace lints three of them.
 
 ## 8. Conversions and identifiers
 
 - **`as_` / `to_` / `into_` by cost and ownership.** `as_` for a cheap borrow, `to_` for a
-  fallible or allocating conversion, `into_` for consuming. `DerivationId::as_str` currently returns
-  an owned `String` despite the `as_` prefix, which is an open audit finding.
+  fallible or allocating conversion, `into_` for consuming. `DerivationId::as_str` and
+  `RelationshipId::as_str` both return an owned `String` despite the `as_` prefix, which is an open
+  audit finding.
 - **`From` / `TryFrom`, never `Into` directly.** There are zero direct `Into`/`TryInto` impls.
 - **Identifiers are newtypes.** `ObservationId`, `DerivationId`, `RelationshipId`,
   `HarnessSessionId`, `SourceEventId` are distinct types over `Ulid`. That is what makes
@@ -201,7 +242,11 @@ A refusal that is not documented reads as a bug when a caller hits it.
 | `#[must_use]`            | **No lint** — by hand                                                |
 | No `unwrap`/`expect`     | **No lint** — by hand (`clippy::unwrap_used` is clean and available) |
 | Conversion naming        | **No lint** — by hand                                                |
+| Public API documented    | **No lint** — `missing_docs` is commented out in `Cargo.toml`        |
 
-The bottom row of "no lint" entries is where this codebase is most exposed: several load-bearing
-conventions rest on discipline alone. Turning the clean Clippy lints on
-(see `AGENTS.md` § Commands) converts two of them into compiler-enforced rules at no current cost.
+The bottom row of "no lint" entries is where this codebase is most exposed: four load-bearing
+conventions rest on discipline alone, and an audit against this document found two of them violated —
+a redacting-parent hiding a leaking `Provenance`, and a production `expect` that no lint could see
+(AUDIT A-01, A-08). Turning the clean Clippy lints on converts two of them into compiler-enforced
+rules at no current cost. Enabling `missing_docs` converts the fourth; it is already claimed by
+`PRD.md` and currently not set.

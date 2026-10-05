@@ -146,6 +146,11 @@ impl HarnessEventType {
 }
 
 /// Scalar value reported as an observation facet.
+//
+// TODO(LOW): `#[serde(untagged)]` structurally cannot honour `deny_unknown_fields`, making this the
+// one place in the workspace where the Raw-shadow validation guarantee is impossible by
+// construction. Harmless today because all three variants are scalars; a future non-scalar variant
+// would begin silently accepting documents that every other persisted type rejects.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum FacetValue {

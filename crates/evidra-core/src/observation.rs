@@ -173,10 +173,18 @@ impl SubjectRef {
 }
 
 /// Describes how an observation entered the ledger.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct Provenance {
     collector: String,
     transformations: Vec<String>,
+}
+
+impl fmt::Debug for Provenance {
+    /// Omits collector identity and transformation names, which disclose the producer and the
+    /// policies applied to the evidence.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_struct("Provenance").finish_non_exhaustive()
+    }
 }
 
 impl<'de> Deserialize<'de> for Provenance {
@@ -658,6 +666,24 @@ mod tests {
             "secret-payload",
             "secret-collector",
         ] {
+            assert!(!rendered.contains(secret), "debug output leaked {secret}");
+        }
+    }
+
+    /// Confirms provenance debug output redacts the collector and its transformations.
+    ///
+    /// Regression: `Provenance` derived `Debug`, so this type alone printed producer identity and
+    /// policy names. `Observation` and `ObservationDraft` already redacted their fields, which is
+    /// why the omission was invisible from any envelope-level test.
+    #[test]
+    fn provenance_debug_redacts_collector_and_transformations() {
+        let provenance =
+            Provenance::transformed("secret-collector", vec!["secret-transformation".to_owned()])
+                .expect("provenance should be valid");
+
+        let rendered = format!("{provenance:?}");
+
+        for secret in ["secret-collector", "secret-transformation"] {
             assert!(!rendered.contains(secret), "debug output leaked {secret}");
         }
     }

@@ -91,6 +91,7 @@ remain attributed claims. Do not grant inbox write access to untrusted producers
 | [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md)   | Invariants every contributor must preserve                    |
 | [`docs/OPERATIONS.md`](docs/OPERATIONS.md)     | Running the CLI, inbox lifecycle, quarantine                  |
 | [`docs/SCHEMA.md`](docs/SCHEMA.md)             | Tables, triggers, migrations, validation                      |
+| [`docs/AUDIT.md`](docs/AUDIT.md)               | Audit findings and their dispositions                         |
 | [`docs/adr/`](docs/adr/)                       | Architecture decision records                                 |
 | [`docs/designs/`](docs/designs/)               | Slice and feature designs                                     |
 | [`policies/`](policies/)                       | Git-tracked assumptions, invariants, controls, accepted risks |
