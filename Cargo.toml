@@ -51,17 +51,24 @@ dbg_macro = "deny"
 todo = "deny"
 unimplemented = "deny"
 
-# TODO(HIGH): AGENTS.md forbids five things in production code — `unwrap`, `expect`, `panic`, `todo`,
-# `unimplemented`. Only three are enforced here. `unwrap_used`, `expect_used`, and `panic` are held
-# by discipline alone, which is why the single production `expect` (evidra-engine/src/lib.rs, in
-# `Evidence::strictest_redaction`) survived a clean clippy run. Add the three lints, then scope
-# `#![allow(clippy::unwrap_used, clippy::expect_used)]` to each `mod tests` — the workspace has
-# 550+ `expect` calls, all but one of them in test code.
+# TODO(HIGH): enable `unwrap_used`, `expect_used`, and `panic`. AGENTS.md forbids five things in
+# production code — `unwrap`, `expect`, `panic`, `todo`, `unimplemented`. Only three are enforced here.
+# The other three rest on discipline alone, which is exactly why the single production `expect`
+# (`evidra-engine/src/lib.rs`, in `Evidence::strictest_redaction`, on the ADR-010 redaction-inheritance
+# path) survived a clean `-D warnings` clippy run.
 #
-# TODO(MEDIUM): `PRD.md` claims `missing_docs` is enabled. It is not, and none of the four lib crates
-# declare it, so nothing checks the public API against its own docs.
+# Scope the allow to test code rather than denying bare, or the test modules lose their assertions:
+#   `#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]`
+# The workspace has 550+ `expect` calls, all but one inside `#[cfg(test)]`.
+# See A-11 in `docs/AUDIT.md`.
+#
+# TODO(MEDIUM): `missing_docs` is not enabled either, though `PRD.md` claims it is and none of the four
+# lib crates declare it — so nothing checks the public API against its own docs.
 # missing_docs = "warn"
+# Part of A-11 in `docs/AUDIT.md`.
 #
 # TODO(MEDIUM): `evidra-engine` is missing from `[workspace.dependencies]` above even though it is a
-# workspace member. Harmless today because no crate consumes it, but it will bite whoever wires the
-# engine into the CLI and reaches for `evidra-engine.workspace = true`.
+# workspace member. Harmless today because no crate consumes it — `evidra-cli` does not depend on it,
+# which is why the derived slice is reachable only through the library API — but it will bite whoever
+# wires the engine into the CLI and reaches for `evidra-engine.workspace = true`.
+# See A-12 in `docs/AUDIT.md`.

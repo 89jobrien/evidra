@@ -322,10 +322,13 @@ impl DerivationMethod {
 
     /// Returns the stable persisted spelling of the method kind.
     //
-    // TODO(MEDIUM): zero call sites anywhere in the workspace — not even tests. It exists for the
-    // `DerivationStore` implementation that does not exist yet (see `ports.rs`), which currently
-    // carries the same values as SQL literals (`kind IN ('facet','aggregate','cluster')`). Confirm
-    // whether a future adapter should call this or keep using literals before adding a caller.
+    // TODO(MEDIUM): wire this up or delete it — it has zero call sites, tests included.
+    //
+    // It exists for the `DerivationStore` implementation that does not exist yet (see `ports.rs`),
+    // which currently carries the same values as SQL literals
+    // (`kind IN ('facet','aggregate','cluster')`). The risk is not the dead code; it is that an adapter
+    // re-implements the spelling as literals and leaves two sources of truth disagreeing. See A-13 in
+    // `docs/AUDIT.md`.
     #[must_use]
     pub fn kind_str(&self) -> &'static str {
         match self {
@@ -449,8 +452,9 @@ impl DerivationScope {
 
     /// Returns the filters that selected the evidence.
     //
-    // TODO(MEDIUM): zero call sites anywhere in the workspace — not even tests. A store adapter
-    // would need it to turn a scope back into a query.
+    // TODO(MEDIUM): wire this up or delete it — it has zero call sites, tests included.
+    //
+    // A store adapter needs it to turn a scope back into a query. See A-13 in `docs/AUDIT.md`.
     #[must_use]
     pub fn selection(&self) -> &[FacetFilter] {
         &self.selection
@@ -651,9 +655,10 @@ pub enum EvidenceTarget {
 impl EvidenceTarget {
     /// Returns the stable persisted spelling of the target kind.
     //
-    // TODO(MEDIUM): zero call sites anywhere in the workspace — not even tests. Same status as
-    // `DerivationMethod::kind_str` above: it awaits a `DerivationStore`/`RelationshipStore`
-    // implementation that does not exist.
+    // TODO(MEDIUM): wire this up or delete it — it has zero call sites, tests included.
+    //
+    // Same status as `DerivationMethod::kind_str` above: it awaits a `DerivationStore` /
+    // `RelationshipStore` implementation that does not exist. See A-13 in `docs/AUDIT.md`.
     #[must_use]
     pub fn kind_str(&self) -> &'static str {
         match self {
@@ -903,12 +908,18 @@ impl Derivation {
     ///
     /// Returns [`DerivationError::IntegritySerialization`] when the record cannot be serialized.
     //
-    // TODO(HIGH): never called from production code — only from tests and the example. The
-    // `derivations` table has no digest column and `evidra-store` never verifies this hash on read,
-    // whereas observations *are* digest-verified on every load via `Observation::verify_integrity`.
-    // Derived rows therefore carry no tamper detection at all, which is a soundness gap rather than
-    // dead code. Either add a digest column verified on read, or remove the method so it does not
-    // imply a guarantee the store does not provide.
+    // TODO(HIGH): derived records have no tamper detection — add a digest column verified on read, or
+    // delete this method so it stops implying a guarantee the store does not provide.
+    //
+    // It is called only from tests, the proptests, and the example; never from production code. The
+    // `derivations` table has no digest column and `evidra-store` never verifies this hash, whereas
+    // observations *are* digest-verified on every load through `Observation::verify_integrity`.
+    //
+    // This is a soundness gap rather than dead code, and it undercuts a load-bearing claim: the
+    // architecture grounds itself in "a reader cannot trust the file, so `open()` probes". The v3 probe
+    // re-deserializes every document and checks indexed columns, but a derived row whose document was
+    // swapped for another *valid* document is not detected. See A-09 in `docs/AUDIT.md`; this also bears
+    // on ADR-003 and on the trajectory-export gate in `docs/ROADMAP.md`.
     pub fn content_hash(&self) -> Result<[u8; 32], DerivationError> {
         let bytes =
             serde_json::to_vec(self).map_err(|_| DerivationError::IntegritySerialization)?;

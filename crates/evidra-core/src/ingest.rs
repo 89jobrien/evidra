@@ -60,9 +60,16 @@ impl fmt::Display for QuarantineReason {
 
 /// Content obtained from one claimed inbox item.
 //
-// TODO(HIGH): the `Event` variant wraps a `Box<AgentHarnessEvent>`, so this carries evidence and
-// AGENTS.md requires a redacted Debug. It prints only field types today because the inner event's
-// own `Debug` is redacted, but that safety is incidental rather than declared.
+// TODO(HIGH): replace this derived `Debug` with a redacted one — it carries evidence.
+//
+// The `Event` variant wraps a `Box<AgentHarnessEvent>`, and AGENTS.md requires a redacted `Debug` on
+// anything evidence-bearing. It prints only field types today because the inner event's own `Debug`
+// redacts, but that safety is incidental rather than declared: nothing here states the requirement, so
+// it breaks the moment a third field is added.
+//
+// Use `impl_redacted_debug!`. See A-10 in `docs/AUDIT.md`, which pairs this with `evidra_engine`'s
+// `Evidence<'a>` — same accident, same fix, and the engine case additionally needs the macro exported
+// or a hand-written impl.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClaimedHarnessContent {
     /// One validated harness event.

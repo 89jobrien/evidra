@@ -280,10 +280,16 @@ fn is_snake_case_identifier(value: &str) -> bool {
 /// Deliberately a borrowed view rather than an owned collection: the engine reads excerpts to decide
 /// what it may not emit, and it never needs to retain them.
 //
-// TODO(HIGH): this holds excerpts and redaction attestations, so AGENTS.md requires a redacted
-// Debug. Nothing leaks today only because both inner types redact themselves — an incidental
-// property that breaks the moment a third field is added. Use `impl_redacted_debug!` from
-// `evidra_core::harness` instead of `derive`.
+// TODO(HIGH): replace this derived `Debug` with a redacted one — it carries evidence.
+//
+// It holds excerpts and redaction attestations, so AGENTS.md requires a redacted `Debug`. Nothing
+// leaks today only because both inner types redact themselves — an incidental property that breaks the
+// moment a third field is added.
+//
+// The macro lives in `evidra-core/src/macros.rs`, declared crate-internal and not
+// `#[macro_export]`, so this crate still cannot reach it: either export it or write the impl by hand,
+// unconstrained on `'a` so the type stays `Debug` over readers that are not. See A-10 in
+// `docs/AUDIT.md`, which pairs this with `ClaimedHarnessContent` in `evidra-core`.
 #[derive(Debug, Clone, Copy)]
 pub struct Evidence<'a> {
     excerpts: &'a [RedactedExcerpt],
@@ -333,12 +339,20 @@ impl<'a> Evidence<'a> {
             // Rebuilding through the validating constructor keeps the inherited record subject to
             // the same rules as one a producer submitted.
             //
-            // TODO(CRITICAL): this is the only `expect` in production code in the workspace, and it
-            // sits on the ADR-010 redaction-inheritance path — the decision that stops a derived
-            // record from weakening any redaction its evidence carries. A failed invariant aborts
-            // the process instead of surfacing a diagnosable error. The fallibility belongs in the
-            // signature: this should return `Result<Option<RedactionRecord>, EngineError>` and
-            // propagate, so callers must decide what a broken redaction union means.
+            // TODO(CRITICAL): move this fallibility into the signature instead of aborting the process
+            // on the ADR-010 redaction-inheritance path.
+            //
+            // This is the only `expect` in production code in the workspace, and it sits on the decision
+            // that stops a derived record from weakening any redaction its evidence carries. A failed
+            // invariant aborts instead of surfacing a diagnosable error, on the one path whose failure
+            // means the guarantee did not hold.
+            //
+            // Change the signature to `Result<Option<RedactionRecord>, EngineError>` and propagate, so
+            // callers must decide what a broken redaction union means.
+            //
+            // It survived review because `AGENTS.md` forbids five constructs and the workspace lints
+            // three — see A-11 in `docs/AUDIT.md`. Enabling the lint is the general remedy; this is the
+            // specific hole it would have caught. See also A-08.
             RedactionRecord::new(policy.policy(), policy.version(), transformations)
                 .expect("an attested redaction union stays valid")
         })
@@ -476,6 +490,15 @@ impl Registry {
 /// appear inside it, which catches a copied secret or a copied sentence. And the value must not be
 /// reconstructible from the excerpt's own words, which catches a paraphrase assembled out of terms
 /// the excerpt already used.
+//
+// TODO(HIGH): ADR-010 names `no_facet_value_appears_in_source_excerpt` as the property that holds for
+// arbitrary evidence sets, and the plan's Task 3, plus the 2026-10-03 and 2026-10-04 designs, all cite
+// it as evidence the constraint is enforced. No such property exists. This function is the whole of the
+// enforcement, exercised only by four fixed cases in `mod tests` — beginning with
+// `verbatim_category_from_an_excerpt_is_refused`, alongside the derivable, genuine, and partially
+// overlapping cases — none of which can say anything about arbitrary evidence. Write the property over
+// arbitrary excerpt sets, or correct ADR-010 and the four documents citing it. See A-18 in
+// `docs/AUDIT.md`.
 fn guard_redaction_inheritance(
     namespace: &str,
     name: &str,
@@ -740,11 +763,13 @@ mod tests {
 
     /// Confirms every integer in a dense range lands in exactly one declared band.
     //
-    // TODO(LOW): duplicates the proptest of the same property in `tests::props` below
-    // (`band_is_total`, `banding_is_monotonic`). The proptest versions are the stronger check; these
-    // two fixed-range examples only pin the specific `duration_table` fixture's expected counts.
-    // Consider keeping just the fixture-specific assertions and letting the proptests own the
-    // general properties.
+    // TODO(LOW): drop this example and let the `tests::props` proptests own the general property; keep
+    // only the fixture-specific expected counts here.
+    //
+    // `band_is_total` in `tests::props` below is the stronger check over arbitrary tables and values.
+    // This fixed-range version only pins what the `duration_table` fixture should produce, which is
+    // worth keeping — but as a count assertion, not as a second statement of totality. See A-16 in
+    // `docs/AUDIT.md`.
     #[test]
     fn band_is_total_over_a_dense_range() {
         let table = duration_table();
@@ -781,8 +806,9 @@ mod tests {
 
     /// Confirms a lower raw value never lands in a higher band than a greater one.
     //
-    // TODO(LOW): duplicated by the identically-named proptest in `tests::props`. See the note on
-    // `band_is_total_over_a_dense_range`.
+    // TODO(LOW): delete this test — the identically-named proptest in `tests::props` already covers it
+    // over arbitrary tables, and two tests with one name in one module invites confusion about which is
+    // authoritative. See the note on `band_is_total_over_a_dense_range`; A-16 in `docs/AUDIT.md`.
     #[test]
     fn banding_is_monotonic() {
         let table = duration_table();

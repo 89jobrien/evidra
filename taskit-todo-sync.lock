@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "file": "crates/evidra-cli/tests/cli.rs",
+      "text": "TODO(MEDIUM): build this fixture through `evidra-store` so it exercises the real v1 migration",
+      "issue_number": 1
+    },
+    {
+      "file": "crates/evidra-core/src/derivation.rs",
+      "text": "TODO(MEDIUM): wire this up or delete it — it has zero call sites, tests included.",
+      "issue_number": 2
+    },
+    {
+      "file": "crates/evidra-core/src/derivation.rs",
+      "text": "TODO(MEDIUM): wire this up or delete it — it has zero call sites, tests included.",
+      "issue_number": 3
+    },
+    {
+      "file": "crates/evidra-core/src/derivation.rs",
+      "text": "TODO(MEDIUM): wire this up or delete it — it has zero call sites, tests included.",
+      "issue_number": 4
+    },
+    {
+      "file": "crates/evidra-core/src/derivation.rs",
+      "text": "TODO(HIGH): derived records have no tamper detection — add a digest column verified on read, or",
+      "issue_number": 5
+    },
+    {
+      "file": "crates/evidra-core/src/harness.rs",
+      "text": "TODO(LOW): document `FacetValue` as a deliberate exemption from the Raw-shadow rule.",
+      "issue_number": 6
+    },
+    {
+      "file": "crates/evidra-core/src/ingest.rs",
+      "text": "TODO(HIGH): replace this derived `Debug` with a redacted one — it carries evidence.",
+      "issue_number": 7
+    },
+    {
+      "file": "crates/evidra-core/src/ports.rs",
+      "text": "TODO(CRITICAL): add `get(&ObservationId)` and `select(&DerivationScope)` to this trait.",
+      "issue_number": 8
+    },
+    {
+      "file": "crates/evidra-core/src/ports.rs",
+      "text": "TODO(CRITICAL): implement this trait in `evidra-store`; it has no implementor and no consumer.",
+      "issue_number": 9
+    },
+    {
+      "file": "crates/evidra-core/src/ports.rs",
+      "text": "TODO(HIGH): correct this doc — superseded rows are not \"individually retrievable\" by any of",
+      "issue_number": 10
+    },
+    {
+      "file": "crates/evidra-core/src/ports.rs",
+      "text": "TODO(CRITICAL): implement this trait in `evidra-store`; it has no implementor and no consumer.",
+      "issue_number": 11
+    },
+    {
+      "file": "crates/evidra-engine/src/lib.rs",
+      "text": "TODO(HIGH): replace this derived `Debug` with a redacted one — it carries evidence.",
+      "issue_number": 12
+    },
+    {
+      "file": "crates/evidra-engine/src/lib.rs",
+      "text": "TODO(CRITICAL): move this fallibility into the signature instead of aborting the process",
+      "issue_number": 13
+    },
+    {
+      "file": "crates/evidra-engine/src/lib.rs",
+      "text": "TODO(HIGH): ADR-010 names `no_facet_value_appears_in_source_excerpt` as the property that holds for",
+      "issue_number": 14
+    },
+    {
+      "file": "crates/evidra-engine/src/lib.rs",
+      "text": "TODO(LOW): drop this example and let the `tests::props` proptests own the general property; keep",
+      "issue_number": 15
+    },
+    {
+      "file": "crates/evidra-engine/src/lib.rs",
+      "text": "TODO(LOW): delete this test — the identically-named proptest in `tests::props` already covers it",
+      "issue_number": 16
+    }
+  ]
+}

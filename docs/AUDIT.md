@@ -19,6 +19,38 @@ Severity here means consequence if the code were reached, not effort to fix.
   exist.
 - **LOW** — duplication or a known structural limitation with no current consequence.
 
+## Tracking
+
+Each open finding is tracked as a GitHub issue, listed below. The mapping is not one-to-one: the
+twenty findings are tracked by eighteen issues, because the three dead-accessor findings (A-13) and
+the two duplicate-test findings (A-16) are each split by code location — a marker per site is the
+workspace's convention, so the issue tracker mirrors the source rather than the work.
+
+| Finding | Issue                                                                                                                                                      |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A-04    | [#9](https://github.com/89jobrien/evidra/issues/9)                                                                                                         |
+| A-05    | [#11](https://github.com/89jobrien/evidra/issues/11)                                                                                                       |
+| A-06    | [#8](https://github.com/89jobrien/evidra/issues/8)                                                                                                         |
+| A-07    | [#10](https://github.com/89jobrien/evidra/issues/10)                                                                                                       |
+| A-08    | [#13](https://github.com/89jobrien/evidra/issues/13)                                                                                                       |
+| A-09    | [#5](https://github.com/89jobrien/evidra/issues/5)                                                                                                         |
+| A-10    | [#7](https://github.com/89jobrien/evidra/issues/7), [#12](https://github.com/89jobrien/evidra/issues/12)                                                   |
+| A-11    | [#17](https://github.com/89jobrien/evidra/issues/17)                                                                                                       |
+| A-12    | [#18](https://github.com/89jobrien/evidra/issues/18)                                                                                                       |
+| A-13    | [#2](https://github.com/89jobrien/evidra/issues/2), [#3](https://github.com/89jobrien/evidra/issues/3), [#4](https://github.com/89jobrien/evidra/issues/4) |
+| A-14    | [#1](https://github.com/89jobrien/evidra/issues/1)                                                                                                         |
+| A-15    | [#6](https://github.com/89jobrien/evidra/issues/6)                                                                                                         |
+| A-16    | [#15](https://github.com/89jobrien/evidra/issues/15), [#16](https://github.com/89jobrien/evidra/issues/16)                                                 |
+| A-18    | [#14](https://github.com/89jobrien/evidra/issues/14)                                                                                                       |
+
+Sixteen of those are auto-tracked: `taskit protocol todo-sync` reads the `TODO` markers in source and
+maintains the mapping in `taskit-todo-sync.lock`. **That lockfile is the linkage and must be
+committed** — without it a fresh clone reports all sixteen markers as new and opens duplicates.
+
+A-11 and A-12 live in `Cargo.toml`, which the scanner does not read, so they are hand-written. Do not
+add `(#N)` citations into marker text: the sync keys on the marker string, so editing it makes the
+marker look new and offers to close the issue it cites.
+
 ## Closed
 
 Three findings were defects with contained fixes. Each is now pinned by a regression test, so the
@@ -175,7 +207,7 @@ accessor or correct the doc.
 
 ### A-08 — the only production `expect` sits on the redaction-inheritance path (CRITICAL, open)
 
-`crates/evidra-engine/src/lib.rs`, `Evidence::inherit_redaction`. ADR-010's constraint — that a
+`crates/evidra-engine/src/lib.rs`, `Evidence::strictest_redaction`. ADR-010's constraint — that a
 derived record may not weaken any redaction its evidence carries — is load-bearing in fact: the
 engine runs the derivability check on every emitted value, and four fixed cases exercise it. (The
 property that four documents claim pins it does not exist — see A-18.) But the union of the evidence's
@@ -213,8 +245,11 @@ prints only field types today because the inner event's own `Debug` redacts.
 leaks today for the same reason — both inner types redact themselves.
 
 Both are safe by coincidence rather than by declaration, and both break the moment a third field is
-added. `impl_redacted_debug!` covers A-10's first case; the macro is private to `evidra-core`, so the
-engine case needs either a `#[macro_export]` or a hand-written impl.
+added. `impl_redacted_debug!` covers the first case directly. The macro now lives in
+`crates/evidra-core/src/macros.rs` — moved out of `harness.rs` and declared before the domain modules
+so every module in `evidra-core` shares one audited definition — but it is still a crate-internal
+`macro_rules!` with no `#[macro_export]`, so `evidra-engine` cannot reach it. The engine case needs
+either an export or a hand-written impl, unconstrained on `'a`.
 
 ### A-11 — three forbidden constructs are unenforced (HIGH, open)
 

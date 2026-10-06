@@ -41,11 +41,19 @@ pub trait ObservationStore {
     /// Adapter-specific error returned by persistence operations.
     type Error: Error + Send + Sync + 'static;
     //
-    // TODO(CRITICAL): this trait has no `get(&ObservationId)` and no `select(...)`, which blocks
-    // every CLI command that needs to read one record or filter the ledger. `list(limit)` is the
-    // only read path. If `select` is added, its filter predicate must match the one
-    // `DerivationStore::current_facets` uses, or windowed queries will silently disagree about
-    // which derivations are current.
+    // TODO(CRITICAL): add `get(&ObservationId)` and `select(&DerivationScope)` to this trait.
+    //
+    // `list(limit)` is currently the only read path — a display query, not a selection primitive. No
+    // command can read one record, and nothing can execute a `DerivationScope` against observations,
+    // so `derive` cannot select its evidence set and a user-supplied window would silently derive from
+    // whatever `list` returned. Specified in
+    // `docs/designs/2026-10-03-derived-cli-surface-design.md`; see A-06 in `docs/AUDIT.md`.
+    //
+    // `select` must delegate to the same scope predicate `DerivationStore::current_facets` uses, not
+    // to a second SQL statement that happens to agree. If they diverge, a derivation's evidence set and
+    // the rows its scope considers current disagree, and the derivation cites evidence the current view
+    // no longer recognises — making it unfalsifiable. Both queries would be individually well-formed, so
+    // `validate_v3` cannot see it.
 
     /// Appends an observation without replacing any existing record.
     ///
@@ -77,11 +85,14 @@ pub trait ObservationStore {
 /// Implementations append only. A revision is a new derivation plus a
 /// [`RelationKind::Supersedes`] relationship, never a mutation of a stored row (ADR-008).
 //
-// TODO(CRITICAL): this trait has no implementor and no consumer anywhere in the workspace. Schema
-// v3 already carries `derivations`, `derivation_facets`, and `derivation_evidence`, but only
+// TODO(CRITICAL): implement this trait in `evidra-store`; it has no implementor and no consumer.
+//
+// Schema v3 already carries `derivations`, `derivation_facets`, and `derivation_evidence`, but only
 // raw-SQL helpers inside `evidra-store`'s test module ever populate them. The derived layer — the
-// entire reason schema v3 exists — is therefore persisted yet unreachable through its own declared
-// interface. Add the `evidra-store` implementation or record explicitly that this is ports-first.
+// entire reason schema v3 exists — is persisted yet unreachable through its own declared interface.
+//
+// Specified in `docs/designs/2026-10-03-derived-cli-surface-design.md`; see A-04 in
+// `docs/AUDIT.md`. Either add the implementation or record explicitly that this is ports-first.
 pub trait DerivationStore {
     /// Adapter-specific error returned by persistence operations.
     type Error: Error + Send + Sync + 'static;
@@ -100,9 +111,12 @@ pub trait DerivationStore {
     /// This is a read-through view. Superseded rows remain stored and remain individually
     /// retrievable; this method decides which ones count as current.
     ///
-    /// TODO(HIGH): "remain individually retrievable" is not true of this trait — there is no
-    /// `get(&DerivationId)`, so a caller holding an id cannot retrieve a single derivation at all.
-    /// `current_facets` and `aggregate` are the only read paths, and both are collection-shaped.
+    /// TODO(HIGH): correct this doc — superseded rows are not "individually retrievable" by any of
+    /// this trait's methods.
+    ///
+    /// There is no `get(&DerivationId)`, so a caller holding an id cannot retrieve a single derivation
+    /// at all. `current_facets` and `aggregate` are the only read paths and both are collection-shaped.
+    /// Either add the accessor or drop the claim; see A-07 in `docs/AUDIT.md`.
     ///
     /// # Errors
     ///
@@ -124,10 +138,11 @@ pub trait DerivationStore {
 
 /// Persistence for the typed edges connecting records.
 //
-// TODO(CRITICAL): no implementor and no consumer anywhere in the workspace. The `relationships`
-// table exists in schema v3 and is populated only by a raw-SQL helper in `evidra-store`'s test
-// module. Note that `derive`/`relate`/`explain` CLI work is blocked on this port as well as on
-// `DerivationStore`.
+// TODO(CRITICAL): implement this trait in `evidra-store`; it has no implementor and no consumer.
+//
+// The `relationships` table exists in schema v3 and is populated only by a raw-SQL helper in
+// `evidra-store`'s test module. The `derive`, `relate`, and `explain` CLI work is blocked on this port
+// as well as on `DerivationStore`. See A-05 in `docs/AUDIT.md`.
 pub trait RelationshipStore {
     /// Adapter-specific error returned by persistence operations.
     type Error: Error + Send + Sync + 'static;

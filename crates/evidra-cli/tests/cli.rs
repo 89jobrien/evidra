@@ -57,11 +57,15 @@ fn repository_with_v1_observation() -> TempDir {
     let store_dir = temp_dir.path().join(".evidra");
     std::fs::create_dir(&store_dir).expect("store directory should be created");
     let database = store_dir.join("evidra.db");
-    // TODO(MEDIUM): opens rusqlite directly instead of going through `evidra-store`, which is why
-    // `rusqlite` is a dev-dependency of the CLI at all. Reaching around the port contradicts
-    // AGENTS.md ("keep external systems behind ports defined in `evidra-core`") and means these
-    // fixtures do not exercise the real v1 migration path — they assert against a schema literal
-    // this test file itself defines, so a drift in `evidra-store` would not fail here.
+    // TODO(MEDIUM): build this fixture through `evidra-store` so it exercises the real v1 migration
+    // path instead of asserting against a schema literal defined in this file.
+    //
+    // It opens `rusqlite` directly, which is why `rusqlite` is a dev-dependency of the CLI at all.
+    // Reaching around the port contradicts AGENTS.md ("keep external systems behind ports defined in
+    // `evidra-core`"), and the consequence is worse than the layering complaint: these fixtures assert
+    // against `V1_SCHEMA`, a literal this test file owns, so a drift in `evidra-store`'s actual v1
+    // schema or migration would not fail here. A migration fixture that does not exercise the migration
+    // reads as coverage while checking nothing. See A-14 in `docs/AUDIT.md`.
     let connection = rusqlite::Connection::open(database).expect("v1 database should open");
     connection
         .execute_batch(V1_SCHEMA)

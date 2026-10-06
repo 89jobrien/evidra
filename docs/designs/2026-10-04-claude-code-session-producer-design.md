@@ -518,9 +518,12 @@ failure mode applies with more force to raw transcript content.
 
 Two practical constraints on that requirement, both learned from how A-01 hid:
 
-- The macro currently lives in `evidra-core` and is not exported, so a producer in `evidra-adapters`
-  cannot use it without either `#[macro_export]` or a hand-written `Debug`. Hand-written is fine and
-  is what `Observation` and `ObservationDraft` already do; use `finish_non_exhaustive()`.
+- The macro now lives in `crates/evidra-core/src/macros.rs` and has been hoisted out of `harness.rs`
+  so the whole crate shares one audited definition. It is still crate-internal — no `#[macro_export]` —
+  so a producer in `evidra-adapters` cannot use it without exporting it or writing a `Debug` by hand.
+  Hand-written is fine and is what `Observation` and `ObservationDraft` already do; use
+  `finish_non_exhaustive()`, which is the load-bearing part: it means a field added later cannot
+  silently start leaking.
 - Assert per type. `Provenance` was only findable because the audit compared a type against the
   convention rather than looking for a symptom, since nothing observable was wrong.
 

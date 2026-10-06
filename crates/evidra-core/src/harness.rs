@@ -147,10 +147,15 @@ impl HarnessEventType {
 
 /// Scalar value reported as an observation facet.
 //
-// TODO(LOW): `#[serde(untagged)]` structurally cannot honour `deny_unknown_fields`, making this the
-// one place in the workspace where the Raw-shadow validation guarantee is impossible by
-// construction. Harmless today because all three variants are scalars; a future non-scalar variant
-// would begin silently accepting documents that every other persisted type rejects.
+// TODO(LOW): document `FacetValue` as a deliberate exemption from the Raw-shadow rule.
+//
+// `#[serde(untagged)]` structurally cannot honour `deny_unknown_fields`, making this the one place in
+// the workspace where the `CONVENTIONS.md` §2 guarantee is impossible by construction. Harmless today
+// because all three variants are scalars; a future non-scalar variant would begin silently accepting
+// documents that every other persisted type rejects.
+//
+// The honest resolution is probably to record the exemption rather than fight the derive — the same
+// reasoning ADR-010 already accepts for its coverage cost. See A-15 in `docs/AUDIT.md`.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum FacetValue {

@@ -19,8 +19,8 @@ emits only its type name. Never `#[derive(Debug)]` on such a type.
 routinely captured and shared. A derived `Debug` on `Observation` would print the entire evidence
 payload. This is a confidentiality boundary, not a style preference.
 
-**How.** For a family of related types, the shared macro at
-`crates/evidra-core/src/harness.rs`:
+**How.** For a family of related types, the shared macro in `crates/evidra-core/src/macros.rs`,
+declared before the domain modules so one audited definition covers the whole crate:
 
 ```rust
 macro_rules! impl_redacted_debug {
@@ -194,7 +194,7 @@ Production code currently has **zero** `unwrap`, **one** `expect`, **zero** `pan
 `unimplemented!`, and zero `unsafe`. The several hundred other `.expect(...)` calls are all inside
 `#[cfg(test)]`.
 
-The one is `Evidence::inherit_redaction` in `evidra-engine`, rebuilding the union of a derived
+The one is `Evidence::strictest_redaction` in `evidra-engine`, rebuilding the union of a derived
 record's redaction attestations. It is on the ADR-010 path — the check that stops a derived record
 weakening any redaction its evidence carries — so a failed invariant there aborts the process instead
 of surfacing a diagnosable error. The fallibility belongs in the signature. See A-08 in
