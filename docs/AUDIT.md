@@ -51,6 +51,26 @@ A-11 and A-12 live in `Cargo.toml`, which the scanner does not read, so they are
 add `(#N)` citations into marker text: the sync keys on the marker string, so editing it makes the
 marker look new and offers to close the issue it cites.
 
+### Beyond the audit
+
+Six items were found while writing this document that are not audit findings — they predate it, or are
+recorded in the plan and roadmap rather than in source. They have no code marker, so they are
+hand-written like A-11 and A-12.
+
+| Item                                                               | Issue                                                |
+| ------------------------------------------------------------------ | ---------------------------------------------------- |
+| Task 4, conformance suites — zero of eleven exist                  | [#19](https://github.com/89jobrien/evidra/issues/19) |
+| Task 5, property suites — nine of twenty-one exist                 | [#20](https://github.com/89jobrien/evidra/issues/20) |
+| `cargo-fuzz` absent; the read path has no fuzz target              | [#21](https://github.com/89jobrien/evidra/issues/21) |
+| ADR-008 through ADR-011 still `Proposed` with their code landed    | [#22](https://github.com/89jobrien/evidra/issues/22) |
+| `obfsck` is a path-only dependency, blocking any crates.io release | [#23](https://github.com/89jobrien/evidra/issues/23) |
+| No taskit protocol-drift surface over `ports.rs`                   | [#24](https://github.com/89jobrien/evidra/issues/24) |
+
+The last one is worth noting against the port slice: `crates/evidra-core/src/ports.rs` is the
+workspace's highest-value drift surface and `taskit protocol drift` reports "no surfaces configured,
+skipping" because there is no `taskit.toml` at all. The port slice will change all three traits, and
+without a lock a signature change is caught only by the compiler at the consuming site.
+
 ## Closed
 
 Three findings were defects with contained fixes. Each is now pinned by a regression test, so the

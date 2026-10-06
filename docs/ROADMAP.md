@@ -96,12 +96,12 @@ unchanged (ADR-003).
 
 ## Deferred, not scheduled
 
-| Item                                     | Why deferred                                                                                     |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| Harness hook installation                | Needs a decision on which harnesses are first-class                                              |
-| Git, Cargo, CI, and filesystem importers | Each needs its own ingestion contract and idempotency key                                        |
-| Derived-record retention                 | Superseded revisions accumulate without bound; no policy yet                                     |
-| Protocol-drift gate on the port surface  | `evidra-core/src/ports.rs` is the workspace's highest-value drift surface and has no taskit lock |
+| Item                                     | Why deferred                                                                                                                                            |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Harness hook installation                | Needs a decision on which harnesses are first-class                                                                                                     |
+| Git, Cargo, CI, and filesystem importers | Each needs its own ingestion contract and idempotency key                                                                                               |
+| Derived-record retention                 | Superseded revisions accumulate without bound; no policy yet                                                                                            |
+| Protocol-drift gate on the port surface  | `evidra-core/src/ports.rs` is the workspace's highest-value drift surface and has no taskit lock ([#24](https://github.com/89jobrien/evidra/issues/24)) |
 
 ## Audit findings
 
@@ -130,3 +130,17 @@ One dependency the earlier version of this note omitted: **Slice 2 cannot begin 
 lands.** Decision capture adds a derived kind, and `DerivationKind::Cluster` already shows what
 happens when a kind is added ahead of its store — the domain type exists, nothing can persist it, and
 nothing notices. That is precisely the state Slice 1 is in now.
+
+### Two gates outside the slice sequence
+
+Neither is a slice, and both block something downstream of one.
+
+**The ADRs are unratified.** ADR-008 through ADR-011 are all `Status: Proposed` with no approval
+date, while their code, schema, and tests have landed. `docs/designs/2026-10-03-derived-cli-surface-design.md`
+calls ratifying them "a precondition for building against them, not a formality to clear afterwards."
+ADR-010 is the one that matters: it accepts a real coverage cost, and that trade currently has no
+tested guard ([#22](https://github.com/89jobrien/evidra/issues/22)).
+
+**A release cannot ship from this tree.** `obfsck` is a path-only dependency, so the workspace cannot be
+published to crates.io at all, and the producer's Stage 2 depends on path-policy behaviour that differs
+between obfsck versions ([#23](https://github.com/89jobrien/evidra/issues/23)).
