@@ -77,6 +77,17 @@ Two deliberate differences from the raw commands worth knowing:
 `taskit init` would additionally generate `taskit.toml` and a `Cruxfile`, which is what enables
 `protocol-drift` surfaces — it currently reports `no surfaces configured, skipping`.
 
+Fuzzing is deliberately **outside** the workspace and outside every gate. `fuzz/` declares its own
+empty `[workspace]` table, so `cargo nextest run --workspace` and `taskit check ci` cannot collect it;
+it also needs nightly and unbounded runtime. The corpus is committed on purpose — a seed that lives
+only in one working tree cannot reproduce a finding for anyone else.
+
+```bash
+cargo +nightly fuzz run agent_harness_jsonl     # bounded JSONL decoder
+cargo +nightly fuzz run claude_code_minimize   # Stage 1 transcript allowlist
+cargo +nightly fuzz run <target> -- -runs=50000 # bounded smoke run
+```
+
 Use `cargo nextest run` rather than `cargo test` if you invoke a runner directly.
 
 ## Rules

@@ -59,9 +59,9 @@ hand-written like A-11 and A-12.
 
 | Item                                                               | Issue                                                |
 | ------------------------------------------------------------------ | ---------------------------------------------------- |
-| Task 4, conformance suites — zero of eleven exist                  | [#19](https://github.com/89jobrien/evidra/issues/19) |
+| Task 4, conformance suites — two of thirteen exist (§12, §13)      | [#19](https://github.com/89jobrien/evidra/issues/19) |
 | Task 5, property suites — nine of twenty-one exist                 | [#20](https://github.com/89jobrien/evidra/issues/20) |
-| `cargo-fuzz` absent; the read path has no fuzz target              | [#21](https://github.com/89jobrien/evidra/issues/21) |
+| `cargo-fuzz` targets exist for the ingestion boundary only         | [#21](https://github.com/89jobrien/evidra/issues/21) |
 | ADR-008 through ADR-011 still `Proposed` with their code landed    | [#22](https://github.com/89jobrien/evidra/issues/22) |
 | `obfsck` is a path-only dependency, blocking any crates.io release | [#23](https://github.com/89jobrien/evidra/issues/23) |
 | No taskit protocol-drift surface over `ports.rs`                   | [#24](https://github.com/89jobrien/evidra/issues/24) |
@@ -145,7 +145,10 @@ though only Tasks 1 through 3 exist — and Tasks 1 through 3 are the only ones 
 A gate that is recorded as passed and was never run is worse than an absent gate: it converts
 "unverified" into "verified" for every reader who trusts the roadmap.
 
-Corrected. ROADMAP and the plan now state what exists and what does not.
+Corrected. ROADMAP and the plan now state what exists and what does not. The counts have moved since:
+`docs/conformance.md` now exists and §12 (`ObservationStore`) and §13 (`RedactionPolicy`) are enforced
+by one shared assertion body each, run against both the production implementation and a reference
+implementation written from the clauses. §1–§11 remain unwritten.
 
 ### A-18 — ADR-010's acceptance criterion is cited by three documents and does not exist (HIGH, open)
 
@@ -350,7 +353,9 @@ What that means in practice:
   broke a test.
 - A test suite passing is not evidence against anything in the Open sections. Those paths have no
   tests because they have no implementation.
-- The strongest available check on the read path is fuzzing, which is named in the plan and not built.
-  `DerivationId::parse` and every manual `Deserialize` impl parse untrusted input and are exactly
-  where a hand-written validator is most likely to be wrong in a way the property suites cannot
-  reach. Installing `cargo-fuzz` is the whole of the blocker.
+- The strongest available check on the remaining parser paths is fuzzing. Two `cargo-fuzz` targets now
+  cover the external harness-ingestion boundary — the bounded JSONL decoder and Stage 1 transcript
+  minimisation — with a committed corpus so a finding stays replayable. `DerivationId::parse` and every
+  manual `Deserialize` impl still parse untrusted input and are exactly where a hand-written validator
+  is most likely to be wrong in a way the property suites cannot reach. Adding a target for them is
+  now a matter of writing the file, not of installing `cargo-fuzz`.

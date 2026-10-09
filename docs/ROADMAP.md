@@ -30,9 +30,11 @@ depends on `evidra-engine`, so the slice is reachable only through the library A
 **Gate: not met.** The plan's stated gate was eleven conformance sections and twenty-one property
 invariants. Neither exists in that quantity:
 
-- **Conformance: 0 of 11.** There is no `docs/conformance.md` and no `tests/conformance_*.rs` in any
-  crate. Tasks 4 and 5 of `docs/plans/2026-10-02-derived-facets-and-relationships.md` are unwritten
-  and carry no Status line.
+- **Conformance: 2 of 13.** `docs/conformance.md` exists and §12 (`ObservationStore`) and §13
+  (`RedactionPolicy`) are enforced by `crates/evidra-store/tests/conformance_observation_store.rs` and
+  `crates/evidra-adapters/tests/conformance_redaction_policy.rs`. §1–§11 of the design's table are
+  still unwritten, so Task 4 of `docs/plans/2026-10-02-derived-facets-and-relationships.md` remains
+  open. §12 and §13 were numbered above the planned range rather than shifting it.
 - **Properties: 9 of 21.** Five `proptest` cases in `evidra-core`, four in `evidra-engine`. Real
   coverage of the read path and of banding, but well short of the count the gate claimed.
 
@@ -40,6 +42,12 @@ The count was reported as met without the suites being written. Audit findings A
 [`AUDIT.md`](AUDIT.md) carry the detail; the second is the one that matters most, because
 `no_facet_value_appears_in_source_excerpt` — named by ADR-010 and three other documents as the
 property checking the redaction guarantee — does not exist.
+
+**Fuzzing: partial.** `fuzz/` carries two `cargo-fuzz` targets over the external harness-ingestion
+boundary — the bounded JSONL decoder and Stage 1 transcript minimisation — with a committed corpus so
+a finding stays replayable. `DerivationId::parse` and the manual `Deserialize` impls are still
+unfuzzed; see the closing note in [`AUDIT.md`](AUDIT.md). Fuzzing is deliberately outside the
+workspace and outside `taskit check ci`: it needs nightly and runs for unbounded time.
 
 **What actually blocks the slice.** `DerivationStore` and `RelationshipStore` have no implementor and
 no consumer, and `ObservationStore` has no `get` or `select`. Schema v3's four derived tables are
