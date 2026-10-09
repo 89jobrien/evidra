@@ -3,6 +3,11 @@
 *.db-shm
 *.db-wal
 *.db-journal
+/fuzz/target/
+/fuzz/artifacts/
+/fuzz/coverage/
+/mutants.out/
+/mutants.out.old/
 .ctx/godmode/
 .ctx/memory-bank/
 .ctx/_WORKING_DIR/

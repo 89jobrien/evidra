@@ -1,0 +1,1 @@
+{"type":"user","uuid":"u2","timestamp":"not-a-timestamp","sessionId":"s1","message":{"content":"run cargo nextest"}}

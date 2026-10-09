@@ -1,0 +1,33 @@
+[package]
+name = "evidra-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Fuzzing is deliberately outside the workspace. These targets need nightly instrumentation, run for
+# unbounded time, and must never be collected by `cargo nextest run --workspace` or by `taskit check
+# ci`. The empty `[workspace]` table below is what detaches this crate from `crates/*`.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+evidra-adapters = { path = "../crates/evidra-adapters" }
+evidra-core = { path = "../crates/evidra-core" }
+serde_json = "1"
+
+[[bin]]
+name = "agent_harness_jsonl"
+path = "fuzz_targets/agent_harness_jsonl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "claude_code_minimize"
+path = "fuzz_targets/claude_code_minimize.rs"
+test = false
+doc = false
+bench = false
