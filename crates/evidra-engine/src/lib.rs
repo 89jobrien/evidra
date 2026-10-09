@@ -1107,6 +1107,81 @@ mod tests {
         }
     }
 
+    /// Confirms the widest attestation decides which policy and version a derived record claims.
+    ///
+    /// Inheriting the *union* is not the same as inheriting the *record*. The union tells a reader
+    /// what was cleared; the policy and version tell them which producer did it, and re-banding or
+    /// re-redacting is not a free change (ADR-009, ADR-010). A test that only counts the union
+    /// cannot tell a strictly-widest winner from a tie broken the wrong way.
+    #[test]
+    fn strictest_redaction_names_the_widest_attestation() {
+        let lenient =
+            evidra_core::RedactionRecord::new("obfsck", "1", vec!["secret-redaction".to_owned()])
+                .expect("record should be valid");
+        let strict = evidra_core::RedactionRecord::new(
+            "obfsck",
+            "2",
+            vec!["secret-redaction".to_owned(), "pii-redaction".to_owned()],
+        )
+        .expect("record should be valid");
+
+        let inherited = Evidence::new(&[], &[lenient.clone(), strict.clone()])
+            .strictest_redaction()
+            .expect("evidence carries attestations");
+        assert_eq!(
+            inherited.version(),
+            "2",
+            "a strictly wider attestation must supply the claimed policy version"
+        );
+
+        let reordered = Evidence::new(&[], &[strict, lenient])
+            .strictest_redaction()
+            .expect("evidence carries attestations");
+        assert_eq!(
+            reordered.version(),
+            "2",
+            "attestation order must not change which policy a derived record claims"
+        );
+    }
+
+    /// Confirms a tie keeps the earlier attestation rather than handing the record to the later one.
+    ///
+    /// A tie is the only case where "widest" is ambiguous, so it is the only case that distinguishes
+    /// a strictly-greater comparison from a greater-or-equal one. Last-writer-wins would make the
+    /// claimed policy depend on the order a producer happened to emit its excerpts in.
+    #[test]
+    fn a_tied_attestation_keeps_the_earlier_policy() {
+        let first =
+            evidra_core::RedactionRecord::new("obfsck", "1", vec!["secret-redaction".to_owned()])
+                .expect("record should be valid");
+        let second = evidra_core::RedactionRecord::new(
+            "other-obfuscator",
+            "9",
+            vec!["pii-redaction".to_owned()],
+        )
+        .expect("record should be valid");
+
+        let inherited = Evidence::new(&[], &[first, second])
+            .strictest_redaction()
+            .expect("evidence carries attestations");
+
+        assert_eq!(
+            inherited.version(),
+            "1",
+            "an equally wide attestation must not displace the one already claimed"
+        );
+        assert_eq!(
+            inherited.policy(),
+            "obfsck",
+            "an equally wide attestation must not relabel the producing policy"
+        );
+        assert_eq!(
+            inherited.transformations(),
+            ["pii-redaction", "secret-redaction"],
+            "the union must still carry every transformation regardless of which record won"
+        );
+    }
+
     /// Confirms a table version is carried, because re-banding is not a free change (ADR-009).
     #[test]
     fn band_table_carries_its_version() {

@@ -752,6 +752,43 @@ mod tests {
         assert!(error.to_string().contains("integrity mismatch"));
     }
 
+    /// Confirms an untampered observation verifies against its own digest.
+    ///
+    /// The tamper test pins only the negative direction, so it is satisfied by a `verify_integrity`
+    /// that answers `false` for everything. This is the positive half, and it is what makes the
+    /// tamper test meaningful: a ledger whose entire claim is that a stored record still hashes to
+    /// what it says must not be able to deny that without failing a test.
+    #[test]
+    fn recorded_observation_verifies_against_its_digest() {
+        let observation = Observation::record(ObservationDraft {
+            occurred_at: Utc::now(),
+            source: SourceRef::new("manual", "cli").expect("source should be valid"),
+            kind: ObservationKind::ManualIntervention,
+            subject: SubjectRef::new("repository", "/tmp/example")
+                .expect("subject should be valid"),
+            payload: json!({"summary": "Untouched summary"}),
+            provenance: Provenance::direct("evidra-cli").expect("provenance should be valid"),
+        })
+        .expect("observation should be recorded");
+
+        assert!(
+            observation
+                .verify_integrity()
+                .expect("integrity verification should complete"),
+            "a freshly recorded observation must verify against its own digest"
+        );
+
+        let round_tripped: Observation =
+            serde_json::from_value(serde_json::to_value(&observation).expect("should serialize"))
+                .expect("an untampered observation should deserialize");
+        assert!(
+            round_tripped
+                .verify_integrity()
+                .expect("integrity verification should complete"),
+            "an observation that survives a round trip must still verify"
+        );
+    }
+
     /// Confirms deserialization rejects fields outside the observation schema.
     #[test]
     fn observation_deserialization_rejects_unknown_fields() {
