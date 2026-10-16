@@ -925,6 +925,65 @@ impl Derivation {
             serde_json::to_vec(self).map_err(|_| DerivationError::IntegritySerialization)?;
         Ok(Sha256::digest(&bytes).into())
     }
+
+    /// Returns a digest over this record's content, excluding its identity.
+    ///
+    /// This is the quantity duplicate detection compares, and it is deliberately distinct from
+    /// [`Derivation::content_hash`]. That one covers `id`, so it changes whenever identity changes
+    /// and is the right check for "was this record altered". This one holds `id` out, so two
+    /// distinct identities carrying identical content agree — which is what lets a republished
+    /// derivation be recognised as the same content, and lets a reused identity carrying different
+    /// content be distinguished from a duplicate.
+    ///
+    /// `recorded_at` is retained. It is caller-supplied precisely so that identical inputs produce an
+    /// identical record, so excluding it would make two genuinely different derivations collide.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DerivationError::IntegritySerialization`] when the record cannot be serialized.
+    pub fn content_digest(&self) -> Result<[u8; 32], DerivationError> {
+        let content = DerivationContent {
+            kind: &self.kind,
+            scope: &self.scope,
+            profile: &self.profile,
+            method: &self.method,
+            facets: &self.facets,
+            recorded_at: &self.recorded_at,
+            supersedes: &self.supersedes,
+        };
+        let bytes =
+            serde_json::to_vec(&content).map_err(|_| DerivationError::IntegritySerialization)?;
+
+        // The version tag is hashed, not stored beside the result, so a change to the digest's
+        // composition produces digests that cannot be mistaken for the previous scheme's. A digest
+        // written under one scheme therefore never satisfies a comparison against another — the
+        // failure is a conflict, which is the safe direction, rather than a silent duplicate.
+        let mut hasher = Sha256::new();
+        hasher.update(CONTENT_DIGEST_TAG);
+        hasher.update(&bytes);
+        Ok(hasher.finalize().into())
+    }
+}
+
+/// The domain separator hashed ahead of a derivation's content digest.
+///
+/// Bumping this is what makes a digest-scheme change observable as a mass conflict rather than a
+/// silent re-keying.
+const CONTENT_DIGEST_TAG: &[u8] = b"evidra.derivation-content/v1\0";
+
+/// The exact fields a content digest covers.
+///
+/// Identity is absent by construction rather than by omission. A field added or reordered here
+/// changes every digest the scheme produces, which is why the digest is version-tagged.
+#[derive(Serialize)]
+struct DerivationContent<'a> {
+    kind: &'a DerivationKind,
+    scope: &'a DerivationScope,
+    profile: &'a UncertaintyProfile,
+    method: &'a DerivationMethod,
+    facets: &'a [FacetProjection],
+    recorded_at: &'a DateTime<Utc>,
+    supersedes: &'a Option<DerivationId>,
 }
 
 /// A directed, typed edge between two records, carrying its own uncertainty.
@@ -1366,6 +1425,50 @@ mod tests {
         let right = Derivation::new(second)?;
 
         assert_eq!(left.content_hash()?, right.content_hash()?);
+        Ok(())
+    }
+
+    /// Confirms the content digest is a function of content alone, not of record identity.
+    ///
+    /// Two quantities exist and the difference matters. `content_hash` covers the whole record
+    /// including `id`, so it identifies a *record* and changes when identity changes — that is what
+    /// makes it usable for tamper detection. A *content* digest must instead agree across distinct
+    /// ids carrying identical content, because that is the quantity duplicate detection compares:
+    /// republishing the same derivation under a fresh identity has to be recognisable as the same
+    /// content, and reusing one identity for different content has to be distinguishable from it.
+    ///
+    /// Identity is therefore excluded from the digest, and the record's `recorded_at` is retained —
+    /// it is caller-supplied precisely so that identical inputs produce an identical record.
+    #[test]
+    fn content_digest_is_independent_of_identity() -> Result<(), Box<dyn std::error::Error>> {
+        let at = Utc
+            .with_ymd_and_hms(2026, 10, 2, 12, 0, 0)
+            .single()
+            .expect("valid instant");
+
+        let mut first_draft = facet_draft(DerivationId::new());
+        first_draft.recorded_at = at;
+        let mut second_draft = facet_draft(DerivationId::new());
+        second_draft.recorded_at = at;
+
+        let first = Derivation::new(first_draft)?;
+        let second = Derivation::new(second_draft)?;
+
+        assert_ne!(
+            first.id(),
+            second.id(),
+            "the fixtures must carry distinct identities for this to test anything"
+        );
+        assert_eq!(
+            first.content_digest()?,
+            second.content_digest()?,
+            "the content digest must not be contaminated by record identity"
+        );
+        assert_ne!(
+            first.content_hash()?,
+            second.content_hash()?,
+            "the record hash covers identity and must still differ across distinct ids"
+        );
         Ok(())
     }
 
