@@ -22,7 +22,11 @@ use thiserror::Error;
 const APPLICATION_ID: i32 = 0x4556_4452;
 const LEGACY_SCHEMA_VERSION: i32 = 1;
 const RECEIPT_SCHEMA_VERSION: i32 = 2;
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
+/// The derived layer as it stood before derivations carried a content digest.
+///
+/// Retained so a v3 database can be recognized and migrated rather than rejected as unfamiliar.
+const DERIVED_SCHEMA_VERSION: i32 = 3;
 const SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS observations (
     id TEXT PRIMARY KEY NOT NULL,
@@ -103,13 +107,29 @@ END;
 /// Two constraints here are deliberately stronger than the application layer, so that a bug in a
 /// writer cannot produce a record the domain would have refused. The facet slot must agree with
 /// which value column is populated, and a relationship may not point at itself.
+/// The v3-to-v4 derived-layer addition: the content digest column.
+///
+/// Appended last so a migrated database matches one created fresh at v4 column for column.
+const DERIVED_DIGEST_SCHEMA: &str = r"
+ALTER TABLE derivations ADD COLUMN content_digest TEXT;
+";
+
+/// Removes the v4-only column, reproducing the v3 derived shape.
+///
+/// Used by `migrate_v2_to_v3`, which applies the current schema and must then hand a genuine v3
+/// database to `migrate_v3_to_v4`.
+const DROP_CONTENT_DIGEST: &str = r"
+ALTER TABLE derivations DROP COLUMN content_digest;
+";
+
 const DERIVED_SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS derivations (
     id TEXT PRIMARY KEY NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('facet', 'aggregate', 'cluster')),
     recorded_at TEXT NOT NULL,
     supersedes TEXT,
-    document TEXT NOT NULL
+    document TEXT NOT NULL,
+    content_digest TEXT
 );
 
 CREATE INDEX IF NOT EXISTS derivations_recorded_at_idx
@@ -319,15 +339,23 @@ impl SqliteObservationStore {
                     restrict_store_permissions(path)?;
                     migrate_v1_to_v2(&mut connection, path)?;
                     migrate_v2_to_v3(&mut connection, path)?;
+                    migrate_v3_to_v4(&mut connection, path)?;
                 }
                 RECEIPT_SCHEMA_VERSION => {
                     validate_v2(&connection, path)?;
                     enable_wal(&connection)?;
                     restrict_store_permissions(path)?;
                     migrate_v2_to_v3(&mut connection, path)?;
+                    migrate_v3_to_v4(&mut connection, path)?;
+                }
+                DERIVED_SCHEMA_VERSION => {
+                    validate_v3_schema(&connection, path)?;
+                    enable_wal(&connection)?;
+                    restrict_store_permissions(path)?;
+                    migrate_v3_to_v4(&mut connection, path)?;
                 }
                 SCHEMA_VERSION => {
-                    validate_v3(&connection, path)?;
+                    validate_v4(&connection, path)?;
                     enable_wal(&connection)?;
                 }
                 _ => {
@@ -341,9 +369,9 @@ impl SqliteObservationStore {
         } else {
             enable_wal(&connection)?;
             restrict_store_permissions(path)?;
-            initialize_v3(&mut connection, path)?;
+            initialize_v4(&mut connection, path)?;
         }
-        validate_v3(&connection, path)?;
+        validate_v4(&connection, path)?;
         restrict_store_permissions(path)?;
         Ok(Self {
             connection,
@@ -373,12 +401,14 @@ impl SqliteObservationStore {
         configure_connection(&connection)?;
         let (application_id, user_version) = database_identity(&connection)?;
         if application_id == APPLICATION_ID
-            && (user_version == LEGACY_SCHEMA_VERSION || user_version == RECEIPT_SCHEMA_VERSION)
+            && (user_version == LEGACY_SCHEMA_VERSION
+                || user_version == RECEIPT_SCHEMA_VERSION
+                || user_version == DERIVED_SCHEMA_VERSION)
         {
-            if user_version == LEGACY_SCHEMA_VERSION {
-                validate_v1(&connection, path)?;
-            } else {
-                validate_v2(&connection, path)?;
+            match user_version {
+                LEGACY_SCHEMA_VERSION => validate_v1(&connection, path)?,
+                RECEIPT_SCHEMA_VERSION => validate_v2(&connection, path)?,
+                _ => validate_v3_schema(&connection, path)?,
             }
             return Err(StoreError::MigrationRequired {
                 path: path.to_path_buf(),
@@ -393,7 +423,7 @@ impl SqliteObservationStore {
                 user_version,
             });
         }
-        validate_v3(&connection, path)?;
+        validate_v4(&connection, path)?;
         enable_wal(&connection)?;
         Ok(Self {
             connection,
@@ -806,13 +836,13 @@ fn database_identity(connection: &Connection) -> Result<(i32, i32), StoreError> 
     Ok((application_id, user_version))
 }
 
-/// Creates and validates a new v3 schema, then records its database identity.
-fn initialize_v3(connection: &mut Connection, path: &Path) -> Result<(), StoreError> {
+/// Creates and validates a new v4 schema, then records its database identity.
+fn initialize_v4(connection: &mut Connection, path: &Path) -> Result<(), StoreError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     transaction.execute_batch(SCHEMA)?;
     transaction.execute_batch(RECEIPT_SCHEMA)?;
     transaction.execute_batch(DERIVED_SCHEMA)?;
-    validate_v3_schema(&transaction, path)?;
+    validate_v4_schema(&transaction, path)?;
     transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()?;
@@ -841,7 +871,39 @@ fn migrate_v2_to_v3(connection: &mut Connection, path: &Path) -> Result<(), Stor
     let documents_before = observation_documents(connection)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     transaction.execute_batch(DERIVED_SCHEMA)?;
+    // `DERIVED_SCHEMA` is the current definition, so applying it here would create the v4 column
+    // immediately and `migrate_v3_to_v4` would then fail adding one that already exists. Dropping it
+    // leaves exactly the v3 shape this step claims to produce. The alternative is a second copy of
+    // eighteen trigger definitions that must stay byte-identical to the validators, which is a worse
+    // trade than one line that removes a column and adds it straight back.
+    transaction.execute_batch(DROP_CONTENT_DIGEST)?;
     validate_v3_schema(&transaction, path)?;
+    if observation_documents(&transaction)? != documents_before {
+        return Err(StoreError::InvalidDerivedSchema);
+    }
+    transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Migrates a validated v3 database to v4 by adding the derivation content digest column.
+///
+/// Additive only, on the same terms as v2 to v3: the schema version is the one thing that may
+/// legitimately change while the stored bytes may not. The column is appended last so that a migrated
+/// database is column-for-column identical to one created fresh at v4, which is what lets the two be
+/// validated by the same checks instead of needing two code paths.
+///
+/// Existing rows are left with a NULL digest rather than having one computed for them. Inventing a
+/// digest for a document that never had one would silently redefine what that row is, and the digest
+/// exists to detect exactly that kind of quiet rewriting. A NULL marks the row as predating v4, and
+/// the store treats such a row as an identity conflict rather than as a possible duplicate, because
+/// failing to notice a reused identity is the failure this column exists to prevent.
+fn migrate_v3_to_v4(connection: &mut Connection, path: &Path) -> Result<(), StoreError> {
+    let documents_before = observation_documents(connection)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    transaction.execute_batch(DERIVED_DIGEST_SCHEMA)?;
+    validate_derived_schema(&transaction, path, &DERIVATIONS)?;
+    validate_derived_controls(&transaction, path)?;
     if observation_documents(&transaction)? != documents_before {
         return Err(StoreError::InvalidDerivedSchema);
     }
@@ -881,8 +943,8 @@ fn validate_v2_schema(connection: &Connection, path: &Path) -> Result<(), StoreE
     validate_receipt_rows(connection)
 }
 
-/// Validates the v3 database identity and every v3 schema invariant.
-fn validate_v3(connection: &Connection, path: &Path) -> Result<(), StoreError> {
+/// Validates the v4 database identity and every v4 schema invariant.
+fn validate_v4(connection: &Connection, path: &Path) -> Result<(), StoreError> {
     let (application_id, user_version) = database_identity(connection)?;
     if application_id != APPLICATION_ID || user_version != SCHEMA_VERSION {
         return Err(StoreError::UnexpectedDatabase {
@@ -891,7 +953,7 @@ fn validate_v3(connection: &Connection, path: &Path) -> Result<(), StoreError> {
             user_version,
         });
     }
-    validate_v3_schema(connection, path)
+    validate_v4_schema(connection, path)
 }
 
 /// Validates v3 structures, controls, and persisted rows across both layers.
@@ -900,7 +962,19 @@ fn validate_v3(connection: &Connection, path: &Path) -> Result<(), StoreError> {
 /// `observations`, so a database that satisfies only the derived checks is not a v3 database.
 fn validate_v3_schema(connection: &Connection, path: &Path) -> Result<(), StoreError> {
     validate_v2_schema(connection, path)?;
-    validate_derived_schema(connection, path)?;
+    validate_derived_schema(connection, path, &DERIVATIONS_V3)?;
+    validate_derived_controls(connection, path)?;
+    validate_derived_constraints(connection, path)?;
+    validate_derived_rows(connection)
+}
+
+/// Validates v4 structures, controls, and persisted rows across both layers.
+///
+/// Identical to [`validate_v3_schema`] except for the `derivations` column set. Both exist because the
+/// v2 to v3 step must check the shape it just produced rather than the shape the chain ends at.
+fn validate_v4_schema(connection: &Connection, path: &Path) -> Result<(), StoreError> {
+    validate_v2_schema(connection, path)?;
+    validate_derived_schema(connection, path, &DERIVATIONS)?;
     validate_derived_controls(connection, path)?;
     validate_derived_constraints(connection, path)?;
     validate_derived_rows(connection)
@@ -1168,7 +1242,11 @@ fn observation_documents(connection: &Connection) -> Result<Vec<(String, String)
 ///
 /// Trigger text is compared after normalization rather than trusted, because a trigger that exists
 /// but has been redefined to do nothing is indistinguishable from a missing one by name alone.
-fn validate_derived_schema(connection: &Connection, path: &Path) -> Result<(), StoreError> {
+fn validate_derived_schema(
+    connection: &Connection,
+    path: &Path,
+    derivations: &[(&str, i32, i32)],
+) -> Result<(), StoreError> {
     const REQUIRED_OBJECTS: [(&str, &str); 20] = [
         ("table", "derivations"),
         ("table", "derivation_facets"),
@@ -1297,19 +1375,44 @@ fn validate_derived_schema(connection: &Connection, path: &Path) -> Result<(), S
         validate_trigger_definition(connection, path, name, expected)?;
     }
 
-    validate_derived_columns(connection, path)?;
+    validate_derived_columns(connection, path, derivations)?;
     Ok(())
 }
 
+/// The `derivations` columns at schema v4: the identity columns, the document, and the digest.
+///
+/// Nullable and last by construction: `ALTER TABLE ... ADD COLUMN` appends, so declaring it last here
+/// is what keeps a migrated v3 database column-for-column identical to a fresh v4 one.
+const DERIVATIONS: [(&str, i32, i32); 6] = [
+    ("id", 1, 1),
+    ("kind", 1, 0),
+    ("recorded_at", 1, 0),
+    ("supersedes", 0, 0),
+    ("document", 1, 0),
+    ("content_digest", 0, 0),
+];
+
+/// The same table before the digest column existed.
+///
+/// `migrate_v2_to_v3` validates its own output before handing it to `migrate_v3_to_v4`, so it must check
+/// against the shape it just produced rather than the shape the chain ends at.
+const DERIVATIONS_V3: [(&str, i32, i32); 5] = [
+    ("id", 1, 1),
+    ("kind", 1, 0),
+    ("recorded_at", 1, 0),
+    ("supersedes", 0, 0),
+    ("document", 1, 0),
+];
+
 /// Verifies the column order, types, nullability, and keys of the derived tables.
-fn validate_derived_columns(connection: &Connection, path: &Path) -> Result<(), StoreError> {
-    const DERIVATIONS: [(&str, i32, i32); 5] = [
-        ("id", 1, 1),
-        ("kind", 1, 0),
-        ("recorded_at", 1, 0),
-        ("supersedes", 0, 0),
-        ("document", 1, 0),
-    ];
+///
+/// `derivations` is supplied by the caller because the migration chain validates its own output: the
+/// v2 to v3 step must check the v3 shape it just produced, while everything downstream checks v4.
+fn validate_derived_columns(
+    connection: &Connection,
+    path: &Path,
+    derivations: &[(&str, i32, i32)],
+) -> Result<(), StoreError> {
     const DERIVATION_FACETS: [(&str, i32, i32); 10] = [
         ("derivation_id", 1, 1),
         ("namespace", 1, 2),
@@ -1339,7 +1442,7 @@ fn validate_derived_columns(connection: &Connection, path: &Path) -> Result<(), 
     ];
 
     for (table, columns_label, expected) in [
-        ("derivations", "derivations columns", &DERIVATIONS[..]),
+        ("derivations", "derivations columns", derivations),
         (
             "derivation_facets",
             "derivation facets columns",
@@ -2257,7 +2360,10 @@ mod tests {
     use serde_json::json;
     use tempfile::TempDir;
 
-    use super::{APPLICATION_ID, RECEIPT_SCHEMA, SCHEMA, SqliteObservationStore, StoreError};
+    use super::{
+        APPLICATION_ID, DERIVED_SCHEMA, RECEIPT_SCHEMA, SCHEMA, SqliteObservationStore, StoreError,
+        observation_documents,
+    };
 
     /// A fixed instant so derived fixtures are reproducible across runs.
     const DERIVED_AT: &str = "2026-10-02T09:00:00Z";
@@ -2499,6 +2605,118 @@ mod tests {
         connection
             .pragma_update(None, "user_version", 2)
             .expect("v2 version should be set");
+    }
+
+    /// Creates a valid v3 database holding one observation and one derivation.
+    ///
+    /// v3 is the whole of schema v3 with a derived layer that carries no content digest, which is exactly
+    /// the state the v4 migration has to accept as input.
+    fn create_v3_database(
+        path: &std::path::Path,
+        observation: &Observation,
+        derivation: &Derivation,
+    ) {
+        create_v2_database(path, Some(observation));
+        let connection = rusqlite::Connection::open(path).expect("v3 database should open");
+        connection
+            .execute_batch(DERIVED_SCHEMA)
+            .expect("derived schema should apply");
+        // A v3 database genuinely lacks this column, and `DERIVED_SCHEMA` is the *current* definition,
+        // so the fixture would otherwise build a v4 database and call it v3 — which then fails with
+        // "duplicate column name" on the migration instead of proving anything. Dropping it reproduces
+        // the prior shape exactly, and the row is inserted afterwards so the foreign keys hold.
+        connection
+            .execute_batch("ALTER TABLE derivations DROP COLUMN content_digest;")
+            .expect("the v3 shape should be restored");
+        insert_derivation(&connection, derivation, false);
+        connection
+            .pragma_update(None, "user_version", 3)
+            .expect("v3 version should be set");
+    }
+
+    /// Reads every derivation document in stable identity order.
+    ///
+    /// Selects only the columns that exist at every schema version, so the same query can be run against
+    /// a v3 database before migration and a v4 database after it.
+    fn derivation_documents(connection: &rusqlite::Connection) -> Vec<(String, String)> {
+        let mut statement = connection
+            .prepare("SELECT id, document FROM derivations ORDER BY id")
+            .expect("derivation query should prepare");
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .expect("derivation query should run")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("derivation rows should decode")
+    }
+
+    /// Reads the stored digest of a derivation, which exists only from v4 onward.
+    fn stored_content_digest(connection: &rusqlite::Connection, id: &str) -> Option<String> {
+        connection
+            .query_row(
+                "SELECT content_digest FROM derivations WHERE id = ?1",
+                [id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .expect("content digest should be readable")
+    }
+
+    /// Confirms the v3 to v4 migration adds the content digest and rewrites nothing.
+    ///
+    /// Additive only, for the same reason the v2 to v3 migration was: the schema version is the one
+    /// thing that may legitimately change while the stored bytes may not. The digest is a new indexed
+    /// value beside the document, never a rewriting of it, and a derivation written under v3 keeps a
+    /// NULL digest rather than having one computed for it — backfilling would silently redefine what
+    /// those stored documents mean, which is the thing this migration exists to avoid.
+    #[test]
+    fn migration_to_v4_preserves_documents_and_adds_the_digest_column() {
+        let temp_dir = TempDir::new().expect("temporary directory should be created");
+        let database = temp_dir.path().join("evidra.db");
+        let observation = observation();
+        let derivation = facet_derivation();
+        create_v3_database(&database, &observation, &derivation);
+
+        let before = {
+            let connection =
+                rusqlite::Connection::open(&database).expect("v3 database should open");
+            let observations =
+                observation_documents(&connection).expect("observations should read");
+            let derivations = derivation_documents(&connection);
+            (observations, derivations)
+        };
+
+        SqliteObservationStore::initialize(&database).expect("migration should succeed");
+
+        let after = {
+            let connection =
+                rusqlite::Connection::open(&database).expect("v4 database should open");
+            let version: i32 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .expect("user_version should read");
+            let observations =
+                observation_documents(&connection).expect("observations should read");
+            let derivations = derivation_documents(&connection);
+            (version, observations, derivations)
+        };
+
+        assert_eq!(after.0, 4, "the database must be migrated to v4");
+        assert_eq!(
+            before.0, after.1,
+            "the migration must not rewrite any observation document"
+        );
+        assert_eq!(
+            before.1, after.2,
+            "the migration must not rewrite any derivation document"
+        );
+        assert_eq!(
+            stored_content_digest(
+                &{ rusqlite::Connection::open(&database).expect("v4 database should open") },
+                &derivation.id().as_str()
+            ),
+            None,
+            "a pre-v4 derivation must keep a NULL digest rather than have one invented"
+        );
     }
 
     /// Captures non-internal schema objects for before-and-after comparisons.
@@ -3091,7 +3309,7 @@ mod tests {
             error,
             StoreError::MigrationRequired {
                 current_version: 1,
-                target_version: 3,
+                target_version: 4,
                 ..
             }
         ));
@@ -3111,7 +3329,7 @@ mod tests {
             error,
             StoreError::MigrationRequired {
                 current_version: 2,
-                target_version: 3,
+                target_version: 4,
                 ..
             }
         ));
@@ -3140,7 +3358,7 @@ mod tests {
             .expect("version should be readable");
 
         assert_eq!(before, after);
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
         assert_eq!(store.list(10).expect("list should succeed"), vec![expected]);
     }
 
@@ -3228,7 +3446,7 @@ mod tests {
             .expect("version should be readable");
 
         assert_eq!(before, after);
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
         assert_eq!(store.list(10).expect("list should succeed"), vec![expected]);
     }
 
@@ -3593,7 +3811,7 @@ mod tests {
 
     #[test]
     /// Creates a new database at v3 with the receipt and derived tables present.
-    fn new_database_is_created_as_valid_v3() {
+    fn new_database_is_created_as_valid_v4() {
         let temp_dir = TempDir::new().expect("temporary directory should be created");
         let database = temp_dir.path().join("evidra.db");
         let store = SqliteObservationStore::initialize(&database).expect("store should initialize");
@@ -3620,7 +3838,7 @@ mod tests {
                 .expect("table presence should be queryable");
             assert!(present, "expected a v3 database to contain {table}");
         }
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
     }
 
     #[test]
