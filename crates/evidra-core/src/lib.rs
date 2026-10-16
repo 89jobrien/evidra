@@ -60,8 +60,8 @@ pub use observation::{
     ObservationKind, Provenance, SourceRef, SubjectRef,
 };
 pub use ports::{
-    AgentHarnessAppendOutcome, AgentHarnessEventSource, DerivationStore, ObservationStore,
-    RelationshipStore,
+    AgentHarnessAppendOutcome, AgentHarnessEventSource, DerivationAppendOutcome, DerivationStore,
+    ObservationStore, RelationshipStore,
 };
 pub use producer::{ProducerError, RedactionPolicy, Reduction};
 pub use transformation::{DROP, OBFUSCATE, is_well_formed};

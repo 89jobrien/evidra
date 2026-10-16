@@ -93,6 +93,27 @@ pub trait ObservationStore {
 //
 // Specified in `docs/designs/2026-10-03-derived-cli-surface-design.md`; see A-04 in
 // `docs/AUDIT.md`. Either add the implementation or record explicitly that this is ports-first.
+/// Result of attempting to append an idempotent derivation.
+///
+/// The three outcomes are load-bearing rather than diagnostic. A derivation is addressed by an
+/// identity the caller supplies, and the same identity may legitimately arrive twice with identical
+/// content — a republication after a retry — or with different content, which means something
+/// reused an identity it did not own. Collapsing the second case into the first would silently
+/// discard the newer record and report success, which is the failure mode the harness observation
+/// path already had to be protected from by `AgentHarnessAppendOutcome`.
+///
+/// Equal identities carrying unequal content are a conflict, never a duplicate. That rule is the
+/// workspace's, not this trait's invention; see `AGENTS.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DerivationAppendOutcome {
+    /// A new derivation and its content digest were committed.
+    Recorded,
+    /// The identity and content digest were already recorded.
+    Duplicate,
+    /// The identity was already recorded with different content.
+    IdentityConflict,
+}
+
 pub trait DerivationStore {
     /// Adapter-specific error returned by persistence operations.
     type Error: Error + Send + Sync + 'static;

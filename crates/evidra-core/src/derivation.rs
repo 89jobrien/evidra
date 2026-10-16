@@ -1331,8 +1331,8 @@ mod tests {
         RelationKind, Relationship, RelationshipId, ScopeFidelity, UncertaintyProfile,
     };
     use crate::{
-        FacetValue, Observation, ObservationDraft, ObservationId, ObservationKind, Provenance,
-        SourceRef, SubjectRef,
+        DerivationAppendOutcome, FacetValue, Observation, ObservationDraft, ObservationId,
+        ObservationKind, Provenance, SourceRef, SubjectRef,
     };
 
     /// Records a real observation so the test holds a genuine ledger identity.
@@ -1543,6 +1543,36 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    /// Confirms the append outcome carries no derivation content through `Debug`.
+    ///
+    /// Two-sided on purpose. Asserting only that the rendering omits evidence would be satisfied by
+    /// a `Debug` that printed nothing at all, which is the weakness nine `Debug` impls in this
+    /// workspace still carry. The positive assertion is what makes the negative one mean something:
+    /// an outcome must stay diagnosable while staying content-free.
+    #[test]
+    fn derivation_append_outcome_is_source_free_in_debug() {
+        for (outcome, variant) in [
+            (DerivationAppendOutcome::Recorded, "Recorded"),
+            (DerivationAppendOutcome::Duplicate, "Duplicate"),
+            (
+                DerivationAppendOutcome::IdentityConflict,
+                "IdentityConflict",
+            ),
+        ] {
+            let rendered = format!("{outcome:?}");
+            assert!(
+                rendered.contains(variant),
+                "the outcome must stay diagnosable by naming its variant, got {rendered}"
+            );
+            for secret in ["01ARZ3NDEKTSV4RRFFQ69G5FAV", "/workspace", "verified-fail"] {
+                assert!(
+                    !rendered.contains(secret),
+                    "the append outcome leaked {secret}: {rendered}"
+                );
+            }
+        }
     }
 
     /// Confirms a derivation that declares facets must carry some, and vice versa.
