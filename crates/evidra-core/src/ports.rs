@@ -120,11 +120,25 @@ pub trait DerivationStore {
 
     /// Appends a derivation and its indexed facet projection atomically.
     ///
+    /// An implementor must decide duplicate detection before it inserts, not by attempting the
+    /// insert and inspecting the failure. The `derivations` table carries a trigger that aborts any
+    /// insert whose identity already exists, which makes a duplicate and a genuine constraint
+    /// violation indistinguishable at that point.
+    ///
+    /// The comparison is over [`Derivation::content_digest`], not over the whole record: identity is
+    /// excluded so that two distinct identities carrying identical content agree, and content is
+    /// included so that reusing one identity for something else is detected as
+    /// [`DerivationAppendOutcome::IdentityConflict`] rather than being silently discarded.
+    ///
+    /// A row written before the schema carried digests cannot satisfy this comparison. An
+    /// implementor must treat such a row as a conflict rather than as a match, because failing to
+    /// detect reuse of an identity is the failure this whole mechanism exists to prevent.
+    ///
     /// # Errors
     ///
     /// Returns the adapter error when the record cannot be appended or a facet namespace is not
     /// registered.
-    fn append(&mut self, derivation: &Derivation) -> Result<(), Self::Error>;
+    fn append(&mut self, derivation: &Derivation) -> Result<DerivationAppendOutcome, Self::Error>;
 
     /// Returns facet values for a scope, resolving the supersedes chain so each superseded
     /// derivation is represented exactly once by its current successor.
@@ -185,4 +199,148 @@ pub trait RelationshipStore {
         target: EvidenceTarget,
         relation: Option<RelationKind>,
     ) -> Result<Vec<Relationship>, Self::Error>;
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Duration, TimeZone as _, Utc};
+
+    use super::{DerivationAppendOutcome, DerivationStore};
+    use crate::{
+        Derivation, DerivationDraft, DerivationId, DerivationKind, DerivationMethod,
+        DerivationScope, FacetProjection, FacetValue, SubjectRef, UncertaintyProfile,
+    };
+
+    /// An in-memory store that records identities and their content digests.
+    ///
+    /// The duplicate/conflict distinction lives in the trait's contract, not in any one adapter, so
+    /// the reference implementation is written against the contract rather than against SQLite.
+    struct RecordingDerivationStore {
+        recorded: Vec<(DerivationId, [u8; 32])>,
+    }
+
+    impl RecordingDerivationStore {
+        /// Creates an empty reference store.
+        fn new() -> Self {
+            Self {
+                recorded: Vec::new(),
+            }
+        }
+    }
+
+    impl DerivationStore for RecordingDerivationStore {
+        type Error = std::convert::Infallible;
+
+        /// Mirrors the workspace rule: equal identity with equal content is a duplicate, equal
+        /// identity with unequal content is a conflict.
+        fn append(
+            &mut self,
+            derivation: &Derivation,
+        ) -> Result<DerivationAppendOutcome, Self::Error> {
+            let digest = derivation
+                .content_digest()
+                .expect("content digest should serialize");
+            match self.recorded.iter().find(|(id, _)| *id == derivation.id()) {
+                Some((_, stored)) => Ok(if *stored == digest {
+                    DerivationAppendOutcome::Duplicate
+                } else {
+                    DerivationAppendOutcome::IdentityConflict
+                }),
+                None => {
+                    self.recorded.push((derivation.id(), digest));
+                    Ok(DerivationAppendOutcome::Recorded)
+                }
+            }
+        }
+
+        /// Unused by this test.
+        fn current_facets(
+            &self,
+            _scope: &DerivationScope,
+        ) -> Result<Vec<crate::CurrentFacet>, Self::Error> {
+            Ok(Vec::new())
+        }
+
+        /// Unused by this test.
+        fn aggregate(
+            &self,
+            _namespace: &str,
+            _name: &str,
+            _scope: &DerivationScope,
+        ) -> Result<Vec<crate::FacetCount>, Self::Error> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Builds a minimal valid facet derivation.
+    fn facet_draft(id: DerivationId, value: &str, at_offset_days: i64) -> DerivationDraft {
+        let from = Utc
+            .with_ymd_and_hms(2026, 10, 1, 0, 0, 0)
+            .single()
+            .expect("valid instant");
+        let subject = SubjectRef::new("repository", "/workspace").expect("subject should validate");
+        DerivationDraft {
+            id,
+            kind: DerivationKind::Facet,
+            scope: DerivationScope::new(subject, from, from + Duration::days(1), Vec::new())
+                .expect("window should be ordered"),
+            profile: UncertaintyProfile::deterministic(),
+            method: DerivationMethod::Deterministic {
+                version: "1".into(),
+            },
+            facets: vec![
+                FacetProjection::new("friction", "outcome", FacetValue::Text(value.into()))
+                    .expect("projection should validate"),
+            ],
+            recorded_at: from + Duration::days(at_offset_days),
+            supersedes: None,
+        }
+    }
+
+    /// Confirms `append` can report duplicate and conflict rather than only success.
+    ///
+    /// This is the test that forced the signature change. While `append` returned `Result<(), E>` a
+    /// store had nowhere to put a duplicate: it could only report an error, which is wrong, because a
+    /// republication after a retry is not a failure. Or it could report success, which is worse,
+    /// because a caller cannot tell "I stored this" from "this was already there and I discarded
+    /// it". An implementor that wanted to be honest had no way to say so.
+    #[test]
+    fn derivation_store_append_reports_duplicate_and_conflict() {
+        let id = DerivationId::new();
+        let mut store = RecordingDerivationStore::new();
+
+        let original = Derivation::new(facet_draft(id, "verified-fail", 0))
+            .expect("first record should construct");
+        assert_eq!(
+            store.append(&original).expect("append should succeed"),
+            DerivationAppendOutcome::Recorded,
+            "the first append must record"
+        );
+
+        let republished = Derivation::new(facet_draft(id, "verified-fail", 0))
+            .expect("republication should construct");
+        assert_eq!(
+            store
+                .append(&republished)
+                .expect("republished append should succeed"),
+            DerivationAppendOutcome::Duplicate,
+            "an identical republication must be reported as a duplicate, not as success or failure"
+        );
+
+        let reused = Derivation::new(facet_draft(id, "unverified-pass", 0))
+            .expect("reused identity should construct");
+        assert_eq!(
+            store
+                .append(&reused)
+                .expect("conflicting append should succeed"),
+            DerivationAppendOutcome::IdentityConflict,
+            "an identity reused for different content must be a conflict, never a duplicate"
+        );
+
+        assert_eq!(
+            store.recorded.len(),
+            1,
+            "only the first append may have committed anything"
+        );
+    }
 }
