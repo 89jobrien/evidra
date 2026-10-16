@@ -1472,6 +1472,79 @@ mod tests {
         Ok(())
     }
 
+    /// Confirms the content digest discriminates: differing content yields a differing digest.
+    ///
+    /// The independence test pins what the digest must *ignore*. This one pins what it must *see*,
+    /// which is the other half and the one a constant digest would fail. It is the property that
+    /// makes a reused identity with altered content distinguishable from a genuine duplicate, so a
+    /// digest that always returned the same bytes would turn every such reuse into a silent
+    /// no-op — the record would appear to already be recorded while carrying something else.
+    #[test]
+    fn content_digest_differs_when_content_differs() -> Result<(), Box<dyn std::error::Error>> {
+        let at = Utc
+            .with_ymd_and_hms(2026, 10, 2, 12, 0, 0)
+            .single()
+            .expect("valid instant");
+        let id = DerivationId::new();
+
+        let mut baseline = facet_draft(id);
+        baseline.recorded_at = at;
+        let baseline = Derivation::new(baseline)?;
+
+        // Each variant differs from the baseline in exactly one content field, so a digest blind to
+        // any single field is caught rather than masked by the others.
+        let mut altered_facet = facet_draft(id);
+        altered_facet.recorded_at = at;
+        altered_facet.facets[0] = projection(
+            "friction",
+            "outcome",
+            FacetValue::Text("unverified-pass".into()),
+        );
+        let altered_facet = Derivation::new(altered_facet)?;
+
+        let mut altered_confidence = facet_draft(id);
+        altered_confidence.recorded_at = at;
+        altered_confidence.profile = UncertaintyProfile::assisted();
+        let altered_confidence = Derivation::new(altered_confidence)?;
+
+        let mut altered_method = facet_draft(id);
+        altered_method.recorded_at = at;
+        // Only the producing version moves. Switching to an assisted method would also have to
+        // downgrade the confidence band — the disposition gate at `Derivation::validate` refuses an
+        // ungated one — which would change two fields and stop isolating whether the digest sees
+        // `method` at all. A version bump is a single-field change, and a meaningful one: re-banding
+        // under new code is not a free change (ADR-009).
+        altered_method.method = DerivationMethod::Deterministic {
+            version: "2".into(),
+        };
+        let altered_method = Derivation::new(altered_method)?;
+
+        let mut altered_time = facet_draft(id);
+        altered_time.recorded_at = at + Duration::days(1);
+        let altered_time = Derivation::new(altered_time)?;
+
+        let mut superseded = facet_draft(id);
+        superseded.recorded_at = at;
+        superseded.supersedes = Some(DerivationId::new());
+        let superseded = Derivation::new(superseded)?;
+
+        let baseline_digest = baseline.content_digest()?;
+        for (label, altered) in [
+            ("facet value", &altered_facet),
+            ("uncertainty profile", &altered_confidence),
+            ("derivation method", &altered_method),
+            ("recorded_at", &altered_time),
+            ("supersedes", &superseded),
+        ] {
+            assert_ne!(
+                baseline_digest,
+                altered.content_digest()?,
+                "the content digest must see a changed {label}"
+            );
+        }
+        Ok(())
+    }
+
     /// Confirms a derivation that declares facets must carry some, and vice versa.
     #[test]
     fn facet_presence_must_match_kind() {
